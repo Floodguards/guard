@@ -253,13 +253,15 @@ class SensorReader:
         baseline_vector = self.calibrate_initial_orientation()
         baseline_roll, baseline_pitch = vector_to_roll_pitch_deg(baseline_vector)
 
+        minimum_samples = max(1, sample_count // 2)
+        if len(outside_samples) < minimum_samples:
+            raise RuntimeError("외부 A02YYUW 캘리브레이션 측정값이 부족하다.")
+        if len(inside_samples) < minimum_samples:
+            raise RuntimeError("내부 HC-SR04P 캘리브레이션 측정값이 부족하다.")
+
         self._calibration = {
-            "outside_base_distance_cm": (
-                sum(outside_samples) / len(outside_samples) if outside_samples else DEFAULT_CALIBRATION["outside_base_distance_cm"]
-            ),
-            "inside_base_distance_cm": (
-                sum(inside_samples) / len(inside_samples) if inside_samples else DEFAULT_CALIBRATION["inside_base_distance_cm"]
-            ),
+            "outside_base_distance_cm": sum(outside_samples) / len(outside_samples),
+            "inside_base_distance_cm": sum(inside_samples) / len(inside_samples),
             "baseline_roll_deg": baseline_roll,
             "baseline_pitch_deg": baseline_pitch,
         }
@@ -295,7 +297,10 @@ class SensorReader:
     def read_hc_sr04p_distance_cm(self):
         if self.inside_sensor is None:
             return None
-        distance_m = self.inside_sensor.distance
+        try:
+            distance_m = self.inside_sensor.distance
+        except Exception:
+            return None
         if distance_m is None:
             return None
         return distance_m * 100.0
@@ -360,8 +365,14 @@ class SensorReader:
         loop_time = time.monotonic()
 
         # ----- 수위 (외부: A02YYUW, 내부: HC-SR04P) -----
-        outside_raw_cm = self.read_a02yyuw_distance_cm()
-        inside_raw_cm = self.read_hc_sr04p_distance_cm()
+        try:
+            outside_raw_cm = self.read_a02yyuw_distance_cm()
+        except Exception:
+            outside_raw_cm = None
+        try:
+            inside_raw_cm = self.read_hc_sr04p_distance_cm()
+        except Exception:
+            inside_raw_cm = None
 
         outside_filtered_cm = (
             moving_average(self.outside_distance_buffer, outside_raw_cm)
@@ -384,23 +395,39 @@ class SensorReader:
         rise_rate_in_cm_s = calculate_rise_rate(list(self.inside_trend_buffer))
 
         # ----- 기울기 (roll/pitch 분리) -----
-        mpu_data = self.read_mpu6050()
-        filtered_acceleration = self.apply_accelerometer_low_pass(mpu_data["accel"])
-        measured_roll_deg, measured_pitch_deg = vector_to_roll_pitch_deg(filtered_acceleration)
-        roll_deg = measured_roll_deg - self._calibration["baseline_roll_deg"]
-        pitch_deg = measured_pitch_deg - self._calibration["baseline_pitch_deg"]
+        try:
+            mpu_data = self.read_mpu6050()
+            filtered_acceleration = self.apply_accelerometer_low_pass(mpu_data["accel"])
+            measured_roll_deg, measured_pitch_deg = vector_to_roll_pitch_deg(filtered_acceleration)
+            roll_deg = measured_roll_deg - self._calibration["baseline_roll_deg"]
+            pitch_deg = measured_pitch_deg - self._calibration["baseline_pitch_deg"]
+            imu_valid = True
+        except Exception:
+            roll_deg = pitch_deg = 0.0
+            imu_valid = False
 
-        sonar_valid = abs(roll_deg) <= SONAR_VALID_TILT_DEG and abs(pitch_deg) <= SONAR_VALID_TILT_DEG
-        severe_tilt = abs(roll_deg) >= SEVERE_TILT_DEG or abs(pitch_deg) >= SEVERE_TILT_DEG
+        outside_valid = outside_raw_cm is not None
+        inside_valid = inside_raw_cm is not None
+        sonar_valid = (
+            outside_valid
+            and inside_valid
+            and imu_valid
+            and abs(roll_deg) <= SONAR_VALID_TILT_DEG
+            and abs(pitch_deg) <= SONAR_VALID_TILT_DEG
+        )
+        severe_tilt = (
+            imu_valid
+            and (
+                abs(roll_deg) >= SEVERE_TILT_DEG
+                or abs(pitch_deg) >= SEVERE_TILT_DEG
+            )
+        )
 
         # 2026-08-25 여섯 번째 갱신: 문서 14절 SensorData와 대조해서 추가
         # (위 헤더 "변경 4" 참고).
         level_difference_cm = (
             h_out_cm - h_in_cm if h_out_cm is not None and h_in_cm is not None else None
         )
-        outside_valid = outside_raw_cm is not None
-        inside_valid = inside_raw_cm is not None
-
         return {
             "loop_time": loop_time,
             "outside_raw_distance_cm": outside_raw_cm,
@@ -420,11 +447,12 @@ class SensorReader:
             "inside_valid": inside_valid,
             "sonar_valid": sonar_valid,
             "severe_tilt": severe_tilt,
-            "imu_valid": True,
+            "imu_valid": imu_valid,
         }
 
     def shutdown(self):
         if self.outside_serial is not None:
             self.outside_serial.close()
+        if self.inside_sensor is not None:
+            self.inside_sensor.close()
         self.i2c_bus.close()
-

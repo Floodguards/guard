@@ -16,12 +16,22 @@ _relay = None
 
 
 def init(dry_run=DRY_RUN):
-    global _relay
+    global _relay, _already_opened
+    _already_opened = False
     if dry_run:
         _relay = None
         return
     from gpiozero import DigitalOutputDevice
     _relay = DigitalOutputDevice(GPIO_PIN, active_high=ACTIVE_HIGH)
+    _relay.off()
+
+
+def close():
+    global _relay
+    if _relay is not None:
+        _relay.off()
+        _relay.close()
+        _relay = None
 
 
 def run(can_open_flag, dry_run=DRY_RUN):

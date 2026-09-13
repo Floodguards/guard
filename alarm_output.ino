@@ -6,10 +6,10 @@
  *
  * !! 핀 번호 수정함 !!
  * 승현 원본: LED_R_PIN=5, LED_G_PIN=6, LED_B_PIN=3
- * HW 구조도.pdf 실측 + 서연이 확정한 배선: R=2, G=3, B=4
+ * Arduino Uno PWM 출력 기준 배선: R=3, G=5, B=6
  * (부저=9, 진동모터=10은 원본과 실측이 일치해서 그대로 둠)
- * 원본 그대로 업로드하면 실제 배선과 안 맞아 LED가 안 켜지거나
- * 엉뚱한 색이 나올 수 있다. 아래는 수정된 버전이다.
+ * 기존 실측 배선(R=2, G=3, B=4)에서는 PWM 색상 제어가 제한되어
+ * 색이 나오지 않았으므로, 아래 코드는 PWM 핀 배선 기준으로 수정했다.
  * -> 승현에게 확인: 원본은 어떤 배선 기준으로 작성한 것인지?
  *
  * !! 프로토콜 정리 (2026-08-25) !!
@@ -44,10 +44,16 @@
 
 // ===== 핀 설정 =====
 const int BUZZER_PIN = 9;      // 부저 (PWM 가능 핀, tone() 사용) - 실측과 일치
-const int LED_R_PIN = 2;       // RGB LED - Red   (수정: 5 -> 2, 실측 반영)
-const int LED_G_PIN = 3;       // RGB LED - Green (수정: 6 -> 3, 실측 반영)
-const int LED_B_PIN = 4;       // RGB LED - Blue  (수정: 3 -> 4, 실측 반영)
+const int LED_R_PIN = 3;       // RGB LED - Red   (PWM 핀으로 변경)
+const int LED_G_PIN = 5;       // RGB LED - Green (PWM 핀으로 변경)
+const int LED_B_PIN = 6;       // RGB LED - Blue  (PWM 핀으로 변경)
 const int MOTOR_PIN = 10;      // 진동모터 (PWM, 트랜지스터/모터드라이버 경유) - 실측과 일치
+const bool LED_COMMON_ANODE = false; // 공통 애노드 LED면 true로 변경
+
+void writeLedChannel(int pin, int value) {
+  int output = LED_COMMON_ANODE ? 255 - value : value;
+  analogWrite(pin, constrain(output, 0, 255));
+}
 
 // ===== 상태 정의 (Pi_아두이노_시리얼프로토콜 문서 2026-08-25 갱신 기준) =====
 enum State { IDLE, LOW_RISK, MID_RISK, HIGH_RISK, ESCAPE };
@@ -59,9 +65,9 @@ bool blinkOn = false;
 
 // 색상 헬퍼: common-cathode 기준 (common-anode면 255-value로 반전)
 void setColor(int r, int g, int b) {
-  analogWrite(LED_R_PIN, r);
-  analogWrite(LED_G_PIN, g);
-  analogWrite(LED_B_PIN, b);
+  writeLedChannel(LED_R_PIN, r);
+  writeLedChannel(LED_G_PIN, g);
+  writeLedChannel(LED_B_PIN, b);
 }
 
 void allOff() {
@@ -72,6 +78,7 @@ void allOff() {
 
 void setup() {
   Serial.begin(9600);
+  Serial.setTimeout(20);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(LED_R_PIN, OUTPUT);
   pinMode(LED_G_PIN, OUTPUT);

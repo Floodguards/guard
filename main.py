@@ -31,10 +31,10 @@
 # 2. fsm_controller.py의 FsmThresholds(1cm/6cm/14cm/0.3cm·s/20도/60도)는
 #    전부 유나 문서의 "초기 실험값" - 수조 실험 CSV로 보정 필요
 # 3. serial_sender.PORT가 /dev/ttyUSB0 맞는지 실제 보드로 확인
-# 4. alarm_output.ino를 아두이노에 업로드할 때 핀 번호가
-#    R=2/G=3/B=4, 부저=9, 진동=10 인지 재확인 (아래 참고)
-# 5. lcd_display.py는 승현의 원본 파일을 못 받아 재구성한 것이라
-#    실제 코드와 대조 필요, LCD 안내 문구도 임시 초안임
+# 4. alarm_output.ino를 아두이노에 업로드할 때 실제 배선을
+#    R=3/G=5/B=6(PWM), 부저=9, 진동=10으로 맞춰야 함
+# 5. output_controller.py는 현재 통합 실행 기준으로 사용 중이다.
+#    승현 원본 출력 코드와의 문구·LCD 세부 일치 여부는 별도 확인 필요
 #
 # --- rollover_detected 로직 삭제 결정 (2026-08-25, 서연) ---
 # 이전 "8.16" 버전부터 있던 침수감지 디지털 센서(GPIO27, DO 출력)
@@ -162,6 +162,7 @@ def main():
     finally:
         sensor_reader.shutdown()
         output.close()
+        relay_controller.close()
         logger.close()
 
 

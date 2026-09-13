@@ -142,6 +142,9 @@ class FloodguardFsm:
         동일하다. 결과가 같으므로 실제 코드 순서를 따르기로 함."""
         t = self.thresholds
 
+        if data.h_out_cm is None:
+            return self.state, "h_out_unavailable_hold_previous_state"
+
         # 1) 전복 위험(severe_tilt)이면 다른 조건보다 먼저 HIGH로 즉시 승격
         #    (severe_tilt는 imu_valid=True일 때만 True가 될 수 있으므로
         #    이 체크가 imu_valid 체크보다 앞에 와도 결과는 같다)
