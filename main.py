@@ -69,6 +69,7 @@
 # sensor_reader.init()/sensor_reader.read_all()로 호출하도록 바꿨다.
 # ============================================================
 
+import os
 import time
 
 import sensor_input
@@ -78,7 +79,9 @@ import output_controller
 import relay_controller
 import logger
 
-DRY_RUN = True          # 실제 하드웨어 연결 전에는 True로 유지
+# 기본값은 안전을 위해 모의 실행이다.
+# 실제 하드웨어 테스트 때만 FLOODGUARD_DRY_RUN=0으로 실행한다.
+DRY_RUN = os.getenv("FLOODGUARD_DRY_RUN", "1") != "0"
 LOOP_INTERVAL_S = 0.2
 
 
