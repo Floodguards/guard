@@ -1,192 +1,368 @@
 /*
- * FLOODGUARD - 출력/경보 담당 (아두이노)
- * 출처: 승현(C) "C. 출력/경보 담당" 페이지의 alarm_output.ino 원본.
- * 로직(논블로킹 millis() 기반 부저/LED/진동)은 승현 원본 그대로다.
- * 2026-08-25: "수압차 로직" 공식 페이지(서연) 기준으로 정리함.
+ * FLOODGUARD - 출력/경보 담당 Arduino
  *
- * !! 핀 번호 수정함 !!
- * 승현 원본: LED_R_PIN=5, LED_G_PIN=6, LED_B_PIN=3
- * Arduino Uno PWM 출력 기준 배선: R=3, G=5, B=6
- * (부저=9, 진동모터=10은 원본과 실측이 일치해서 그대로 둠)
- * 기존 실측 배선(R=2, G=3, B=4)에서는 PWM 색상 제어가 제한되어
- * 색이 나오지 않았으므로, 아래 코드는 PWM 핀 배선 기준으로 수정했다.
- * -> 승현에게 확인: 원본은 어떤 배선 기준으로 작성한 것인지?
+ * Raspberry Pi -> Arduino Serial Protocol
  *
- * !! 프로토콜 정리 (2026-08-25) !!
- * 처음에는 "수압차 로직" 페이지(IDLE/LOW/MID/HIGH 4단계만 설명)
- * 기준으로 ESCAPE를 제거했었는데, 이후 "Pi_아두이노_시리얼프로토콜"
- * 공식 문서에 ESCAPE 상태를 정식으로 추가하기로 해서 다시 넣었다.
- * (문서: 탈출 유도 단계, HIGH 이후 실제 탈출을 안내하는 단계)
- * 1) ESCAPE 상태와 handleEscape() - 승현 원본 로직 그대로 복원함.
- *    2026-08-25 갱신: HIGH->ESCAPE 전환 기준도 확정됨 (서연 결정,
- *    README_불일치보고서.md 9번 참고) - 창문이 실제로 열리는 순간
- *    fsm_controller.escalate_to_escape()가 호출되고,
- *    serial_sender.send_state("ESCAPE")로 이 아두이노까지 실제로
- *    전송된다. 더 이상 "Pi 쪽 로직 없음" 상태가 아니다.
- * 2) 상태 전환 시 "ACK:<state>\n"를 Pi로 되돌려 보내는 응답은 계속
- *    제거된 상태다 - 공식 프로토콜(Pi->Arduino 단방향, 응답 없음)에
- *    없고 Pi 쪽도 읽지 않기 때문. ESCAPE 추가와는 별개 사안.
+ * IDLE
+ * LOW
+ * MID
+ * HIGH
+ * ESCAPE
  *
- * 시리얼 프로토콜: 라즈베리파이 -> 아두이노, 개행문자('\n')로 끝나는 문자열
- * 예) "IDLE\n", "LOW\n", "MID\n", "HIGH\n", "ESCAPE\n"
- *
- * !! "Pi_아두이노_시리얼프로토콜" 공식 페이지와 다른 점 (참고용, 오류 아님) !!
- * 그 문서의 예제 코드는 digitalWrite()로 LED를 단순 ON/OFF
- * (LOW=초록, MID=노랑, HIGH=빨강 고정)하고 부저도 digitalWrite로
- * 켠다. 승현(C)의 이 코드는 그보다 훨씬 정교하다 - 단계별 점멸
- * 패턴, tone()으로 주파수를 바꾼 경보음, analogWrite로 진동 세기
- * 조절까지 들어가 있다. 프로토콜(메시지 형식)은 동일해서 호환에는
- * 문제 없지만, 공식 문서의 "주의: 부저가 수동(passive) 타입이면
- * digitalWrite 대신 tone()/noTone()을 써야 한다"는 지적을 C의
- * 코드는 이미 tone()/noTone()으로 반영하고 있어 오히려 문서의
- * 기본 예제보다 더 안전한 버전이다.
+ * Serial baud rate: 9600
  */
 
-// ===== 핀 설정 =====
-const int BUZZER_PIN = 9;      // 부저 (PWM 가능 핀, tone() 사용) - 실측과 일치
-const int LED_R_PIN = 3;       // RGB LED - Red   (PWM 핀으로 변경)
-const int LED_G_PIN = 5;       // RGB LED - Green (PWM 핀으로 변경)
-const int LED_B_PIN = 6;       // RGB LED - Blue  (PWM 핀으로 변경)
-const int MOTOR_PIN = 10;      // 진동모터 (PWM, 트랜지스터/모터드라이버 경유) - 실측과 일치
-const bool LED_COMMON_ANODE = false; // 공통 애노드 LED면 true로 변경
+// =====================================================
+// 핀 설정
+// =====================================================
+
+const int BUZZER_PIN = 8;
+
+// RGB LED
+const int LED_R_PIN = 6;
+const int LED_G_PIN = 9;
+const int LED_B_PIN = 5;
+
+// 진동 모터
+const int MOTOR_PIN = 10;
+
+// 공통 캐소드 = false
+const bool LED_COMMON_ANODE = false;
+
+// =====================================================
+// 상태 정의
+// =====================================================
+
+enum State {
+  IDLE,
+  LOW_RISK,
+  MID_RISK,
+  HIGH_RISK,
+  ESCAPE
+};
+
+State currentState = IDLE;
+
+// =====================================================
+// 타이밍 변수
+// =====================================================
+
+unsigned long lastToggleTime = 0;
+
+bool blinkOn = false;
+
+// =====================================================
+// LED 채널 출력
+// =====================================================
 
 void writeLedChannel(int pin, int value) {
-  int output = LED_COMMON_ANODE ? 255 - value : value;
+
+  int output;
+
+  if (LED_COMMON_ANODE) {
+    output = 255 - value;
+  } 
+  else {
+    output = value;
+  }
+
   analogWrite(pin, constrain(output, 0, 255));
 }
 
-// ===== 상태 정의 (Pi_아두이노_시리얼프로토콜 문서 2026-08-25 갱신 기준) =====
-enum State { IDLE, LOW_RISK, MID_RISK, HIGH_RISK, ESCAPE };
-State currentState = IDLE;
+// =====================================================
+// RGB 색상 설정
+// =====================================================
 
-// ===== 비차단(non-blocking) 타이밍용 변수 =====
-unsigned long lastToggleTime = 0;
-bool blinkOn = false;
-
-// 색상 헬퍼: common-cathode 기준 (common-anode면 255-value로 반전)
 void setColor(int r, int g, int b) {
+
   writeLedChannel(LED_R_PIN, r);
   writeLedChannel(LED_G_PIN, g);
   writeLedChannel(LED_B_PIN, b);
 }
 
+// =====================================================
+// 모든 출력 OFF
+// =====================================================
+
 void allOff() {
+
   noTone(BUZZER_PIN);
+
   setColor(0, 0, 0);
+
   analogWrite(MOTOR_PIN, 0);
 }
 
+// =====================================================
+// SETUP
+// =====================================================
+
 void setup() {
+
   Serial.begin(9600);
   Serial.setTimeout(20);
+
   pinMode(BUZZER_PIN, OUTPUT);
+
   pinMode(LED_R_PIN, OUTPUT);
   pinMode(LED_G_PIN, OUTPUT);
   pinMode(LED_B_PIN, OUTPUT);
+
   pinMode(MOTOR_PIN, OUTPUT);
+
+  // 시작할 때 모든 출력 OFF
   allOff();
+
+  lastToggleTime = millis();
 }
 
+// =====================================================
+// LOOP
+// =====================================================
+
 void loop() {
+
+  // Raspberry Pi 명령 확인
   readSerialCommand();
 
+  // 현재 상태에 따른 출력
   switch (currentState) {
-    case IDLE:       handleIdle();   break;
-    case LOW_RISK:    handleLow();    break;
-    case MID_RISK:    handleMid();    break;
-    case HIGH_RISK:   handleHigh();   break;
-    case ESCAPE:      handleEscape(); break;
+
+    case IDLE:
+      handleIdle();
+      break;
+
+    case LOW_RISK:
+      handleLow();
+      break;
+
+    case MID_RISK:
+      handleMid();
+      break;
+
+    case HIGH_RISK:
+      handleHigh();
+      break;
+
+    case ESCAPE:
+      handleEscape();
+      break;
   }
 }
 
-// ===== 시리얼 명령 수신 =====
+// =====================================================
+// Raspberry Pi 명령 수신
+// =====================================================
+
 void readSerialCommand() {
-  if (!Serial.available()) return;
+
+  if (!Serial.available()) {
+    return;
+  }
 
   String cmd = Serial.readStringUntil('\n');
+
   cmd.trim();
 
   State newState = currentState;
-  if (cmd == "IDLE") newState = IDLE;
-  else if (cmd == "LOW") newState = LOW_RISK;
-  else if (cmd == "MID") newState = MID_RISK;
-  else if (cmd == "HIGH") newState = HIGH_RISK;
-  else if (cmd == "ESCAPE") newState = ESCAPE;
-  else return; // 알 수 없는 명령은 무시
 
+  if (cmd == "IDLE") {
+
+    newState = IDLE;
+  }
+
+  else if (cmd == "LOW") {
+
+    newState = LOW_RISK;
+  }
+
+  else if (cmd == "MID") {
+
+    newState = MID_RISK;
+  }
+
+  else if (cmd == "HIGH") {
+
+    newState = HIGH_RISK;
+  }
+
+  else if (cmd == "ESCAPE") {
+
+    newState = ESCAPE;
+  }
+
+  else {
+
+    // 알 수 없는 명령
+    return;
+  }
+
+  // 상태가 변경된 경우
   if (newState != currentState) {
+
     currentState = newState;
-    allOff();          // 상태 전이 시 잔여 출력 초기화
+
+    // 이전 상태의 출력 제거
+    allOff();
+
+    // 새로운 상태 타이머 초기화
     lastToggleTime = millis();
+
     blinkOn = false;
   }
 }
 
-// ===== 단계별 동작 =====
+// =====================================================
+// IDLE
+// 모든 출력 OFF
+// =====================================================
 
-// IDLE: 모든 출력 정지
 void handleIdle() {
+
   allOff();
 }
 
-// LOW: 부저·LED 1차 경고 (노란색, 저강도 단발 경고음)
-void handleLow() {
-  setColor(255, 200, 0); // 노란색 고정
-  analogWrite(MOTOR_PIN, 0); // 진동 없음
+// =====================================================
+// LOW
+//
+// 노란색 고정
+// 진동 없음
+// 1초마다 짧은 경고음
+// =====================================================
 
+void handleLow() {
+
+  // 노란색
+  setColor(255, 200, 0);
+
+  // 진동 OFF
+  analogWrite(MOTOR_PIN, 0);
+
+  // 1초마다 경고음
   if (millis() - lastToggleTime >= 1000) {
-    tone(BUZZER_PIN, 1500, 150); // 1.5kHz, 150ms
+
+    tone(BUZZER_PIN, 1500, 150);
+
     lastToggleTime = millis();
   }
 }
 
-// MID: 강한 경고음 + 진동모터 동작 (주황색 점멸)
+// =====================================================
+// MID
+//
+// 주황색 점멸
+// 강한 경고음
+// 진동
+// =====================================================
+
 void handleMid() {
-  unsigned long interval = 400; // 점멸 주기
+
+  const unsigned long interval = 400;
+
   if (millis() - lastToggleTime >= interval) {
+
     blinkOn = !blinkOn;
+
     lastToggleTime = millis();
 
     if (blinkOn) {
-      setColor(255, 100, 0);       // 주황색
-      tone(BUZZER_PIN, 2500, 300); // 강한 경고음
-      analogWrite(MOTOR_PIN, 200); // 진동 ON
-    } else {
+
+      // 주황색
+      setColor(255, 100, 0);
+
+      // 경고음
+      tone(BUZZER_PIN, 2500, 300);
+
+      // 진동
+      analogWrite(MOTOR_PIN, 200);
+    }
+
+    else {
+
+      // LED OFF
       setColor(0, 0, 0);
-      analogWrite(MOTOR_PIN, 0);   // 진동 OFF (점멸형 패턴)
+
+      // 진동 OFF
+      analogWrite(MOTOR_PIN, 0);
     }
   }
 }
 
-// HIGH: 최대 경보 (빨간색 빠른 점멸, 최대 진동, 연속 경보음)
+// =====================================================
+// HIGH
+//
+// 빨간색 빠른 점멸
+// 최대 진동
+// 지속 경보음
+// =====================================================
+
 void handleHigh() {
-  unsigned long interval = 150; // 빠른 점멸
+
+  const unsigned long interval = 150;
+
   if (millis() - lastToggleTime >= interval) {
+
     blinkOn = !blinkOn;
+
     lastToggleTime = millis();
 
     if (blinkOn) {
+
+      // 밝은 빨간색
       setColor(255, 0, 0);
-      tone(BUZZER_PIN, 3000);      // 지속음 (duration 생략 = 계속 울림)
-    } else {
-      setColor(80, 0, 0);          // 완전히 끄지 않고 은은하게(잔상 효과)
+
+      // 3kHz 경보음
+      tone(BUZZER_PIN, 3000);
+    }
+
+    else {
+
+      // 약한 빨간색
+      setColor(80, 0, 0);
+
+      // 부저 OFF
       noTone(BUZZER_PIN);
     }
   }
-  analogWrite(MOTOR_PIN, 255); // 진동 최대 지속
+
+  // 진동 최대
+  analogWrite(MOTOR_PIN, 255);
 }
 
-// ESCAPE: 탈출 유도 - 레드 스트로브 + 최대 진동 + 경보음 지속
-// 2026-08-25: Pi_아두이노_시리얼프로토콜 문서에 정식 추가되어 복원함.
-// 전환 기준도 확정되어 main.py -> fsm_controller.escalate_to_escape()
-// -> serial_sender가 실제로 "ESCAPE\n"을 보낸다 (위 헤더 주석 참고).
+// =====================================================
+// ESCAPE
+//
+// 매우 빠른 빨간색 스트로브
+// 최대 진동
+// 지속 경보음
+// =====================================================
+
 void handleEscape() {
-  unsigned long interval = 80; // 매우 빠른 스트로브
+
+  const unsigned long interval = 80;
+
   if (millis() - lastToggleTime >= interval) {
+
     blinkOn = !blinkOn;
+
     lastToggleTime = millis();
-    setColor(blinkOn ? 255 : 0, 0, 0);
+
+    if (blinkOn) {
+
+      // 빨간색 ON
+      setColor(255, 0, 0);
+    }
+
+    else {
+
+      // LED OFF
+      setColor(0, 0, 0);
+    }
   }
+
+  // 3.5kHz 지속 경보
   tone(BUZZER_PIN, 3500);
+
+  // 진동 최대
   analogWrite(MOTOR_PIN, 255);
 }
