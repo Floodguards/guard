@@ -99,9 +99,20 @@ import os
 import time
 from collections import deque
 
-import serial
-from gpiozero import DistanceSensor
-from smbus import SMBus
+try:
+    import serial
+except ImportError:  # dry-run can run without Raspberry Pi packages
+    serial = None
+
+try:
+    from gpiozero import DistanceSensor
+except ImportError:  # dry-run can run without Raspberry Pi packages
+    DistanceSensor = None
+
+try:
+    from smbus import SMBus
+except ImportError:  # dry-run can run without Raspberry Pi packages
+    SMBus = None
 
 
 # ----- 이동평균/추세 윈도우 -----
@@ -204,13 +215,18 @@ def _convert_signed_16bit(high_byte, low_byte):
 # ============================================================
 
 class SensorReader:
-    def __init__(self):
+    def __init__(self, dry_run=True):
+        self.dry_run = dry_run
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
         self.inside_sensor = None   # gpiozero.DistanceSensor (HC-SR04P, 내부), init()에서 생성
+        self.i2c_bus = None
 
-        self.i2c_bus = SMBus(1)
-        self.i2c_bus.write_byte_data(MPU6050_ADDRESS, 0x6B, 0x00)
-        time.sleep(0.1)
+        if not self.dry_run:
+            if SMBus is None:
+                raise RuntimeError("smbus is required for real sensor input")
+            self.i2c_bus = SMBus(1)
+            self.i2c_bus.write_byte_data(MPU6050_ADDRESS, 0x6B, 0x00)
+            time.sleep(0.1)
 
         self.outside_distance_buffer = deque(maxlen=DISTANCE_FILTER_SIZE)
         self.inside_distance_buffer = deque(maxlen=DISTANCE_FILTER_SIZE)
@@ -348,6 +364,16 @@ class SensorReader:
     # ----- 초기화 / 메인 루프 -----
 
     def init(self):
+        if self.dry_run:
+            self.load_calibration()
+            print("[DRY RUN] sensor setup skipped")
+            return
+
+        if serial is None or DistanceSensor is None:
+            raise RuntimeError(
+                "pyserial, gpiozero, and smbus are required for real sensor input"
+            )
+
         self.outside_serial = serial.Serial(
             port=OUTSIDE_SERIAL_PORT,
             baudrate=OUTSIDE_SERIAL_BAUDRATE,
@@ -362,6 +388,28 @@ class SensorReader:
         self.load_calibration()
 
     def read_all(self):
+        if self.dry_run:
+            return {
+                "loop_time": time.monotonic(),
+                "outside_raw_distance_cm": 30.0,
+                "outside_distance_cm": 30.0,
+                "inside_raw_distance_cm": 30.0,
+                "inside_distance_cm": 30.0,
+                "h_out_cm": 0.0,
+                "h_in_cm": 0.0,
+                "level_difference_cm": 0.0,
+                "rise_rate_out_cm_s": 0.0,
+                "rise_rate_in_cm_s": 0.0,
+                "rise_rate_cm_s": 0.0,
+                "roll_deg": 0.0,
+                "pitch_deg": 0.0,
+                "outside_valid": True,
+                "inside_valid": True,
+                "sonar_valid": True,
+                "severe_tilt": False,
+                "imu_valid": True,
+            }
+
         loop_time = time.monotonic()
 
         # ----- 수위 (외부: A02YYUW, 내부: HC-SR04P) -----
@@ -455,4 +503,5 @@ class SensorReader:
             self.outside_serial.close()
         if self.inside_sensor is not None:
             self.inside_sensor.close()
-        self.i2c_bus.close()
+        if self.i2c_bus is not None:
+            self.i2c_bus.close()

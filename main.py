@@ -32,7 +32,7 @@
 #    전부 유나 문서의 "초기 실험값" - 수조 실험 CSV로 보정 필요
 # 3. serial_sender.PORT가 /dev/ttyUSB0 맞는지 실제 보드로 확인
 # 4. alarm_output.ino를 아두이노에 업로드할 때 실제 배선을
-#    R=3/G=5/B=6(PWM), 부저=9, 진동=10으로 맞춰야 함
+#    R=6/G=9/B=5(PWM), 부저=8, 진동=10으로 맞춰야 함
 # 5. output_controller.py는 현재 통합 실행 기준으로 사용 중이다.
 #    승현 원본 출력 코드와의 문구·LCD 세부 일치 여부는 별도 확인 필요
 #
@@ -86,7 +86,7 @@ LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader()
+    sensor_reader = sensor_input.SensorReader(dry_run=DRY_RUN)
     sensor_reader.init()
     output = output_controller.OutputController(
         output_controller.OutputConfig(dry_run=DRY_RUN)
