@@ -44,6 +44,11 @@ _file = None
 _writer = None
 
 
+def _value_or_blank(sensor_data, key):
+    value = sensor_data.get(key)
+    return "" if value is None else value
+
+
 def init():
     global _file, _writer
     write_header = not os.path.exists(CSV_FILE_NAME) or os.path.getsize(CSV_FILE_NAME) == 0
@@ -61,13 +66,13 @@ def log(sensor_data, fsm_state, fsm_reason, sensor_valid,
         round(f_net_n, 2) if f_net_n is not None else "",
         int(can_open_flag), pressure_reason,
         int(relay_result["relay_on"]), relay_result["reason"],
-        sensor_data.get("outside_raw_distance_cm") or "",
-        sensor_data.get("outside_distance_cm") or "",
-        sensor_data.get("inside_raw_distance_cm") or "",
-        sensor_data.get("inside_distance_cm") or "",
-        sensor_data.get("h_out_cm") or "",
-        sensor_data.get("h_in_cm") or "",
-        sensor_data.get("level_difference_cm") or "",
+        _value_or_blank(sensor_data, "outside_raw_distance_cm"),
+        _value_or_blank(sensor_data, "outside_distance_cm"),
+        _value_or_blank(sensor_data, "inside_raw_distance_cm"),
+        _value_or_blank(sensor_data, "inside_distance_cm"),
+        _value_or_blank(sensor_data, "h_out_cm"),
+        _value_or_blank(sensor_data, "h_in_cm"),
+        _value_or_blank(sensor_data, "level_difference_cm"),
         round(sensor_data.get("rise_rate_out_cm_s") or 0, 3),
         round(sensor_data.get("rise_rate_in_cm_s") or 0, 3),
         round(sensor_data.get("roll_deg") or 0, 2),

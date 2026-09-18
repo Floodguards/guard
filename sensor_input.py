@@ -215,13 +215,14 @@ def _convert_signed_16bit(high_byte, low_byte):
 # ============================================================
 
 class SensorReader:
-    def __init__(self, dry_run=True):
+    def __init__(self, dry_run=True, use_imu=False):
         self.dry_run = dry_run
+        self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
         self.inside_sensor = None   # gpiozero.DistanceSensor (HC-SR04P, 내부), init()에서 생성
         self.i2c_bus = None
 
-        if not self.dry_run:
+        if not self.dry_run and self.use_imu:
             if SMBus is None:
                 raise RuntimeError("smbus is required for real sensor input")
             self.i2c_bus = SMBus(1)
@@ -370,9 +371,7 @@ class SensorReader:
             return
 
         if serial is None or DistanceSensor is None:
-            raise RuntimeError(
-                "pyserial, gpiozero, and smbus are required for real sensor input"
-            )
+            raise RuntimeError("pyserial and gpiozero are required for real sensor input")
 
         self.outside_serial = serial.Serial(
             port=OUTSIDE_SERIAL_PORT,
@@ -443,28 +442,34 @@ class SensorReader:
         rise_rate_in_cm_s = calculate_rise_rate(list(self.inside_trend_buffer))
 
         # ----- 기울기 (roll/pitch 분리) -----
-        try:
-            mpu_data = self.read_mpu6050()
-            filtered_acceleration = self.apply_accelerometer_low_pass(mpu_data["accel"])
-            measured_roll_deg, measured_pitch_deg = vector_to_roll_pitch_deg(filtered_acceleration)
-            roll_deg = measured_roll_deg - self._calibration["baseline_roll_deg"]
-            pitch_deg = measured_pitch_deg - self._calibration["baseline_pitch_deg"]
-            imu_valid = True
-        except Exception:
+        if self.use_imu:
+            try:
+                mpu_data = self.read_mpu6050()
+                filtered_acceleration = self.apply_accelerometer_low_pass(mpu_data["accel"])
+                measured_roll_deg, measured_pitch_deg = vector_to_roll_pitch_deg(filtered_acceleration)
+                roll_deg = measured_roll_deg - self._calibration["baseline_roll_deg"]
+                pitch_deg = measured_pitch_deg - self._calibration["baseline_pitch_deg"]
+                imu_valid = True
+            except Exception:
+                roll_deg = pitch_deg = 0.0
+                imu_valid = False
+        else:
+            # MPU6050을 아직 사용하지 않는 실험 단계에서는 수평으로 가정한다.
             roll_deg = pitch_deg = 0.0
-            imu_valid = False
+            imu_valid = True
 
         outside_valid = outside_raw_cm is not None
         inside_valid = inside_raw_cm is not None
         sonar_valid = (
             outside_valid
             and inside_valid
-            and imu_valid
+            and (not self.use_imu or imu_valid)
             and abs(roll_deg) <= SONAR_VALID_TILT_DEG
             and abs(pitch_deg) <= SONAR_VALID_TILT_DEG
         )
         severe_tilt = (
-            imu_valid
+            self.use_imu
+            and imu_valid
             and (
                 abs(roll_deg) >= SEVERE_TILT_DEG
                 or abs(pitch_deg) >= SEVERE_TILT_DEG

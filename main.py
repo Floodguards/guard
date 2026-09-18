@@ -82,11 +82,17 @@ import logger
 # 기본값은 안전을 위해 모의 실행이다.
 # 실제 하드웨어 테스트 때만 FLOODGUARD_DRY_RUN=0으로 실행한다.
 DRY_RUN = os.getenv("FLOODGUARD_DRY_RUN", "1") != "0"
+# MPU6050 로직을 사용할 때만 1로 켠다. 기본값 0은 A02YYUW+HC-SR04P
+# 수위 센서부터 실험할 수 있게 하기 위한 설정이다.
+USE_IMU = os.getenv("FLOODGUARD_USE_IMU", "0") == "1"
 LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader(dry_run=DRY_RUN)
+    sensor_reader = sensor_input.SensorReader(
+        dry_run=DRY_RUN,
+        use_imu=USE_IMU,
+    )
     sensor_reader.init()
     output = output_controller.OutputController(
         output_controller.OutputConfig(dry_run=DRY_RUN)
