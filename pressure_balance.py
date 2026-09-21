@@ -1,31 +1,22 @@
 # ============================================================
 # pressure_balance.py
-# 2026-08-25: 정연(B)의 실제 실행 로그(터미널)로 확인함.
-# f_net_n은 상태와 무관하게 항상 계산됨(IDLE도 f_net=0.00N으로
-# 찍힘). window_width_m 역산 결과 정연 코드는 아직 0.152 사용중
-# 인 게 확인됨. 포맥스판의 수압 작용 면 가로 길이는 37cm로 확정했다.
+# 2026-08-25 historical note: 당시 정연(B)의 실제 실행 로그에서
+# f_net_n 계산을 확인했으며, 그때의 37cm 사각판/폭 가정은 아래
+# 2026-09-21 trapezoid remeasurement update로 대체됐다.
 #
 # 기존 F_net ≤ 57.7N은 μ=0.83 가정에 따른 계산 추정치였다.
-# 2026-09-20 사용자가 제공한 참고 이미지에 따라 포맥스-PVC/철판 접촉의
-# 설계 입력값을 μ_s=0.45, μ_k=0.40으로 채택했다. 판 질량은
-# 37×21.7×0.4cm, 밀도 0.55g/cm³ 가정으로 약 0.1766kg 추정했다.
-# (50.4N - 0.1766kg×9.8m/s²) / 0.45 ≈ 108.2N으로 재산정했다.
-# 마찰계수는 이미지 참고값이며 제조사 공식값/젖은 실측값이 아니다.
-# 실제 가이드 법선반력·모터 전달효율·판 질량을 확인 전 계산 추정치다.
-# 2026-09-21 갱신: 잠정 마찰계수를 μ_s=0.50, μ_k=0.30으로 정리했다.
-# 개방 시작은 정지마찰 기준이며 (50.4 - 0.1766×9.8)/0.50 ≈ 97.3N.
-# 운동마찰로 계산한 162.2N은 미끄러지기 시작한 뒤의 별도 참고값이다.
+# 2026-09-21 재측정: 패널은 사다리꼴이며 아래폭 33.3cm, 위폭 36.4cm,
+# 높이 21.7cm(기존 측정과 동일), 두께 3mm다. 수압 폭은 수위에 따라
+# 선형으로 변한다고 보고 패널 높이 방향으로 압력을 적분한다.
+# 판 밀도 0.55g/cm³, 구동력 50.4N, μ_s=0.50은 아직 설계 추정값이다.
+# 새 치수 기준 판 부피 약 226.87cm³, 추정 질량 약 0.1248kg,
+# (50.4 - 0.1248×9.8)/0.50 ≈ 98.35N. 구조 실측 전 계산 추정치다.
+# μ_k=0.30으로 구한 약 163.9N은 운동 시작 뒤 참고값일 뿐 개방 기준이 아니다.
 #
-# 2026-08-25 추가 수정 1 (정연의 "개방 판단" 로직 문서/스크린샷 기준):
-# 1) "안쪽 수위가 바깥쪽보다 높게 들어오는 이상 상황에서는 음수 힘이
-#    나오지 않도록 처리" - h_out_m**2 - h_in_m**2가 음수가 되면 0으로
-#    클램프하도록 compute_f_net_n()을 수정함.
-#
-#    WINDOW_WIDTH_M=0.37m(포맥스판 수압 작용 면 가로 길이 37cm)는 확정값이다.
-#    μ_s=0.45, μ_k=0.40은 제공 이미지의 포맥스-PVC/철판 참고값을 채택한
-#    설계 입력값이다. 공식 제품별 마찰자료나 젖은 실측값은 아니므로 검증 전이다.
-#    PRESSURE_THRESHOLD_N=108.2N은 판 질량 0.1766kg 추정 및 종전 구동력 가정으로
-#    재산정한 잠정값이다.
+# 2026-08-25 historical model (superseded 2026-09-21): rectangular width
+# 0.37m and PRESSURE_THRESHOLD_N=108.2N. Current dimensions/model are the
+# trapezoid constants and integrated pressure expression below.
+# Negative net pressure remains clamped to zero, per the original policy.
 # 2) "알 수 없는 상태: 열지 않음"이 개방 판단표에 명시되어 있어서,
 #    should_open_window()에 IDLE/LOW/MID/HIGH/ESCAPE가 아닌 상태가
 #    들어오면 명시적으로 False를 반환하도록 unknown-state 분기를
@@ -41,27 +32,55 @@
 RHO_WATER = 1000.0
 G = 9.8
 
-# 포맥스판 수압 작용 면 가로 길이는 37cm로 확정되었다.
-# 설계 추정 입력값: μ_s=0.50, μ_k=0.30. 실제 조합·젖은 조건의 실측값은 아니다.
-# 최대 선형 구동력 50.4N, 판 질량 0.1766kg(밀도 0.55g/cm³ 가정)을 적용하면
-# 개방 시작 기준 (50.4 - 0.1766×9.8) / 0.50 ≈ 97.3N.
-# 이는 F_net이 가이드 법선반력에 직접 대응한다는 가정의 계산 추정치이며,
-# 수조/구동부 검증 전 잠정값이다.
-WINDOW_WIDTH_M = 0.37
+# 사다리꼴 패널 실측값. 위/아래는 판을 세웠을 때의 수평 폭이다.
+PANEL_HEIGHT_M = 0.217
+PANEL_BOTTOM_WIDTH_M = 0.333
+PANEL_TOP_WIDTH_M = 0.364
+PANEL_THICKNESS_M = 0.003
+PANEL_DENSITY_KG_M3 = 550.0  # 0.55g/cm³ 가정, 실측 전
+PANEL_AREA_M2 = PANEL_HEIGHT_M * (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
+PANEL_VOLUME_M3 = PANEL_AREA_M2 * PANEL_THICKNESS_M
+PANEL_MASS_KG = PANEL_VOLUME_M3 * PANEL_DENSITY_KG_M3
+
+# 설계 추정 입력값: μ_s=0.50, μ_k=0.30. 실제 접촉 조합·젖은 조건의 실측값은 아니다.
+# 최대 선형 구동력 50.4N과 새 패널 무게를 적용한 정지마찰 기준 추정치.
+MAX_LINEAR_DRIVE_FORCE_N = 50.4
 STATIC_FRICTION_COEFF = 0.50   # PVC 경질판 자료 범위를 참고한 설계 추정값
 KINETIC_FRICTION_COEFF = 0.30  # PVC 접촉 실험값을 참고한 설계 추정값
-PRESSURE_THRESHOLD_N = 97.3    # 정지마찰 기준 추정치: 실제 구조 및 실험 검증 필요
+PRESSURE_THRESHOLD_N = (
+    MAX_LINEAR_DRIVE_FORCE_N - PANEL_MASS_KG * G
+) / STATIC_FRICTION_COEFF  # 약 98.35N, 실제 구조 및 실험 검증 필요
 
 
 def compute_f_net_n(h_out_cm, h_in_cm):
-    """F_net = 1/2 * rho * g * width * (h_out^2 - h_in^2), 단위: N.
-    안쪽 수위가 바깥쪽보다 높은 이상 상황에서는 0으로 클램프한다."""
+    """수위에 따라 폭이 선형으로 변하는 사다리꼴 패널의 순수압력(N).
+
+    한 면의 압력 합력은 rho*g*∫(h-z)w(z)dz이며 z는 판 바닥부터의
+    높이다. 수위가 판 상단을 넘어도 판 전체의 압력을 적분한다.
+    안쪽 합력이 바깥쪽보다 크면 기존 정책대로 순힘을 0으로 클램프한다.
+    """
     h_out_m = (h_out_cm or 0.0) / 100.0
     h_in_m = (h_in_cm or 0.0) / 100.0
-    diff = h_out_m ** 2 - h_in_m ** 2
+
+    def one_side_force_n(water_height_m):
+        wetted_height_m = min(max(water_height_m, 0.0), PANEL_HEIGHT_M)
+        bottom_width = PANEL_BOTTOM_WIDTH_M
+        width_change = PANEL_TOP_WIDTH_M - PANEL_BOTTOM_WIDTH_M
+        pressure_integral = (
+            bottom_width
+            * (water_height_m * wetted_height_m - wetted_height_m ** 2 / 2.0)
+            + (width_change / PANEL_HEIGHT_M)
+            * (
+                water_height_m * wetted_height_m ** 2 / 2.0
+                - wetted_height_m ** 3 / 3.0
+            )
+        )
+        return RHO_WATER * G * pressure_integral
+
+    diff = one_side_force_n(h_out_m) - one_side_force_n(h_in_m)
     if diff < 0:
         diff = 0.0
-    return 0.5 * RHO_WATER * G * WINDOW_WIDTH_M * diff
+    return diff
 
 
 def should_open_window(state, h_out_cm, h_in_cm):
