@@ -42,6 +42,9 @@ FIELDNAMES = [
     "sonar_valid",
     "severe_tilt",
     "f_net_n",
+    "pressure_threshold_n",
+    "pressure_threshold_passed",
+    "pressure_reason",
     "actuation",
 ]
 
@@ -64,14 +67,27 @@ def parse_args():
     return parser.parse_args()
 
 
-def append_sample(writer, data, state, reason, sensor_valid):
+def pressure_snapshot(state, h_out_cm, h_in_cm):
+    """Report the pressure gate without initializing or actuating outputs."""
+    if h_out_cm is None or h_in_cm is None:
+        return "", "sensor_value_unavailable", ""
+
+    _can_open, f_net_n, pressure_reason = pressure_balance.can_open(
+        state, h_out_cm, h_in_cm
+    )
+    if state in ("MID", "HIGH"):
+        threshold_passed = int(pressure_reason == "pressure_balanced_open")
+    else:
+        threshold_passed = ""
+    return f_net_n, pressure_reason, threshold_passed
+
+
+def append_sample(
+    writer, data, state, reason, sensor_valid,
+    f_net_n, pressure_reason, threshold_passed,
+):
     h_out_cm = data["h_out_cm"]
     h_in_cm = data["h_in_cm"]
-    f_net_n = (
-        pressure_balance.compute_f_net_n(h_out_cm, h_in_cm)
-        if h_out_cm is not None and h_in_cm is not None
-        else ""
-    )
     writer.writerow({
         "timestamp": datetime.now().isoformat(timespec="milliseconds"),
         "state": state,
@@ -94,8 +110,25 @@ def append_sample(writer, data, state, reason, sensor_valid):
         "sonar_valid": int(data["sonar_valid"]),
         "severe_tilt": int(data["severe_tilt"]),
         "f_net_n": round(f_net_n, 3) if f_net_n != "" else "",
+        "pressure_threshold_n": pressure_balance.PRESSURE_THRESHOLD_N,
+        "pressure_threshold_passed": threshold_passed,
+        "pressure_reason": pressure_reason,
         "actuation": "disabled",
     })
+
+
+def csv_needs_header(csv_path):
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return True
+
+    with open(csv_path, newline="", encoding="utf-8") as file:
+        existing_header = next(csv.reader(file), None)
+    if existing_header != FIELDNAMES:
+        raise SystemExit(
+            f"CSV 헤더가 현재 형식과 다릅니다: {csv_path}\n"
+            "기존 파일을 보존하려면 새 경로로 실행하세요: --csv 새파일.csv"
+        )
+    return False
 
 
 def main():
@@ -110,7 +143,7 @@ def main():
             "먼저 빈 수조에서 두 수위 센서의 기준값을 보정하세요. IMU 보정은 사용하지 않습니다."
         )
 
-    write_header = not os.path.exists(args.csv) or os.path.getsize(args.csv) == 0
+    write_header = csv_needs_header(args.csv)
     reader = sensor_input.SensorReader(use_imu=False)
     initialized = True
     try:
@@ -137,12 +170,26 @@ def main():
                     sonar_valid=data["sonar_valid"],
                     severe_tilt=data["severe_tilt"],
                 )
-                append_sample(writer, data, state, reason, sensor_valid)
+                f_net_n, pressure_reason, threshold_passed = pressure_snapshot(
+                    state, data["h_out_cm"], data["h_in_cm"]
+                )
+                append_sample(
+                    writer,
+                    data,
+                    state,
+                    reason,
+                    sensor_valid,
+                    f_net_n,
+                    pressure_reason,
+                    threshold_passed,
+                )
                 file.flush()
 
                 print(
                     f"state={state} ({reason}) | h_out={data['h_out_cm']} cm | "
                     f"h_in={data['h_in_cm']} cm | "
+                    f"F_net={f_net_n} N | pressure={pressure_reason} | "
+                    f"threshold_passed={threshold_passed} | "
                     f"sensor_valid={sensor_valid} | actuation=disabled"
                 )
 
