@@ -5,17 +5,18 @@
 # 2026-09-21 trapezoid remeasurement update로 대체됐다.
 #
 # 기존 F_net ≤ 57.7N은 μ=0.83 가정에 따른 계산 추정치였다.
-# 2026-09-21 재측정: 패널은 사다리꼴이며 아래폭 33.3cm, 위폭 36.4cm,
-# 높이 21.7cm(기존 측정과 동일), 두께 3mm다. 수압 폭은 수위에 따라
-# 선형으로 변한다고 보고 패널 높이 방향으로 압력을 적분한다.
-# 판 밀도 0.55g/cm³, 구동력 50.4N, μ_s=0.50은 아직 설계 추정값이다.
-# 새 치수 기준 판 부피 약 226.87cm³, 추정 질량 약 0.1248kg,
-# (50.4 - 0.1248×9.8)/0.50 ≈ 98.35N. 구조 실측 전 계산 추정치다.
+# 2026-09-21 재측정: 패널 아래폭 33.3cm, 위폭 36.4cm,
+# 높이 21.7cm, 두께 3mm다. 요청한 단순 근사로 평균 폭을 사용한다:
+# (33.3+36.4)/2 = 34.85cm. 사다리꼴 폭 변화 적분은 사용하지 않는다.
+# 판 밀도 0.55g/cm³, 구동력 50.4N, μ_s=0.60은 설계 가정이다.
+# 평균 폭 기준 부피 약 226.87cm³, 추정 질량 약 0.1248kg,
+# 이전 식 계산값 (50.4 - 0.1248×9.8)/0.60 ≈ 81.96N은 참고값이다.
+# 현재 임계값은 요청에 따라 68.7N으로 임시 설정했다.
 # μ_k=0.30으로 구한 약 163.9N은 운동 시작 뒤 참고값일 뿐 개방 기준이 아니다.
 #
 # 2026-08-25 historical model (superseded 2026-09-21): rectangular width
 # 0.37m and PRESSURE_THRESHOLD_N=108.2N. Current dimensions/model are the
-# trapezoid constants and integrated pressure expression below.
+# average-width approximation and pressure expression below.
 # Negative net pressure remains clamped to zero, per the original policy.
 # 2) "알 수 없는 상태: 열지 않음"이 개방 판단표에 명시되어 있어서,
 #    should_open_window()에 IDLE/LOW/MID/HIGH/ESCAPE가 아닌 상태가
@@ -32,52 +33,32 @@
 RHO_WATER = 1000.0
 G = 9.8
 
-# 사다리꼴 패널 실측값. 위/아래는 판을 세웠을 때의 수평 폭이다.
+# 판 치수 실측값. 수압 계산은 요청에 따라 평균 폭 근사를 쓴다.
 PANEL_HEIGHT_M = 0.217
 PANEL_BOTTOM_WIDTH_M = 0.333
 PANEL_TOP_WIDTH_M = 0.364
+WINDOW_WIDTH_M = (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
 PANEL_THICKNESS_M = 0.003
 PANEL_DENSITY_KG_M3 = 550.0  # 0.55g/cm³ 가정, 실측 전
 PANEL_AREA_M2 = PANEL_HEIGHT_M * (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
 PANEL_VOLUME_M3 = PANEL_AREA_M2 * PANEL_THICKNESS_M
 PANEL_MASS_KG = PANEL_VOLUME_M3 * PANEL_DENSITY_KG_M3
 
-# 설계 추정 입력값: μ_s=0.50, μ_k=0.30. 실제 접촉 조합·젖은 조건의 실측값은 아니다.
-# 최대 선형 구동력 50.4N과 새 패널 무게를 적용한 정지마찰 기준 추정치.
+# 설계 추정 입력값: μ_s=0.60, μ_k=0.30. 실제 접촉 조합·젖은 조건의 실측값은 아니다.
+# 최대 선형 구동력과 패널 무게로 계산한 값과 별도로, 현재 임계값은 임시 지정값이다.
 MAX_LINEAR_DRIVE_FORCE_N = 50.4
-STATIC_FRICTION_COEFF = 0.50   # PVC 경질판 자료 범위를 참고한 설계 추정값
+STATIC_FRICTION_COEFF = 0.60   # 사용자 지정 설계 추정값; 실제 조합 실측 전
 KINETIC_FRICTION_COEFF = 0.30  # PVC 접촉 실험값을 참고한 설계 추정값
 PRESSURE_THRESHOLD_N = (
-    MAX_LINEAR_DRIVE_FORCE_N - PANEL_MASS_KG * G
-) / STATIC_FRICTION_COEFF  # 약 98.35N, 실제 구조 및 실험 검증 필요
+    68.7
+)  # 사용자 지정 임시 임계값(N); 구조 및 실험 검증 필요
 
 
 def compute_f_net_n(h_out_cm, h_in_cm):
-    """수위에 따라 폭이 선형으로 변하는 사다리꼴 패널의 순수압력(N).
-
-    한 면의 압력 합력은 rho*g*∫(h-z)w(z)dz이며 z는 판 바닥부터의
-    높이다. 수위가 판 상단을 넘어도 판 전체의 압력을 적분한다.
-    안쪽 합력이 바깥쪽보다 크면 기존 정책대로 순힘을 0으로 클램프한다.
-    """
+    """평균 폭 근사로 계산한 순수압력(N); 수위 단위는 cm."""
     h_out_m = (h_out_cm or 0.0) / 100.0
     h_in_m = (h_in_cm or 0.0) / 100.0
-
-    def one_side_force_n(water_height_m):
-        wetted_height_m = min(max(water_height_m, 0.0), PANEL_HEIGHT_M)
-        bottom_width = PANEL_BOTTOM_WIDTH_M
-        width_change = PANEL_TOP_WIDTH_M - PANEL_BOTTOM_WIDTH_M
-        pressure_integral = (
-            bottom_width
-            * (water_height_m * wetted_height_m - wetted_height_m ** 2 / 2.0)
-            + (width_change / PANEL_HEIGHT_M)
-            * (
-                water_height_m * wetted_height_m ** 2 / 2.0
-                - wetted_height_m ** 3 / 3.0
-            )
-        )
-        return RHO_WATER * G * pressure_integral
-
-    diff = one_side_force_n(h_out_m) - one_side_force_n(h_in_m)
+    diff = 0.5 * RHO_WATER * G * WINDOW_WIDTH_M * (h_out_m ** 2 - h_in_m ** 2)
     if diff < 0:
         diff = 0.0
     return diff
