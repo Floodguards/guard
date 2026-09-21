@@ -18,7 +18,7 @@
 # 적은 없다 - 유나 본인 문서에 있는 코드를 그대로 옮긴 것이라, 실제
 # 하드웨어에 연결해서 검증이 필요하다.
 #
-# 단일 통합 실행 경로: 실제 수위 센서와 MPU6050을 읽고 FSM/F_net 판단 후
+# 단일 통합 실행 경로: 실제 수위 센서를 읽고 FSM/F_net 판단 후
 # Arduino/LCD 출력, 필요 시 릴레이 개방, 통합 CSV 기록을 수행한다.
 # 센서만 기록하는 실험은 별도 test2_low_sensor_csv.py를 사용한다.
 # FSM 상태 판단 (_decide_state) 로직 자체는 2026-08-25부터 유나의
@@ -27,7 +27,7 @@
 # --- 실행 전 반드시 확인할 미해결 항목 ---
 # 1. sensor_input.py의 캘리브레이션(sensor_calibration.json)을 빈
 #    수조 상태에서 실제로 실행해서 outside/inside_base_distance_cm,
-#    baseline_roll/pitch_deg를 채워야 함 (지금은 기본값 30.0/0.0)
+#    수위 기준값을 채워야 함 (지금은 기본값 30.0)
 # 2. fsm_controller.py의 수위/기울기 임계값은 초기 실험값이며 CSV로 보정 필요
 # 3. serial_sender.PORT가 /dev/ttyUSB0 맞는지 실제 보드로 확인
 # 4. alarm_output.ino를 아두이노에 업로드할 때 실제 배선을
@@ -41,9 +41,7 @@
 # 1초 유지)는 서연이 원본 문서 페이지에 "이 센서가 필요할까요??"라고
 # 남긴 코멘트가 있었고, 실제 code_A.zip의 config.py에도 이 센서 값이
 # 없는 걸 확인해서 - 이 센서/로직을 완전히 삭제하기로 함. 전복(기울기)
-# 위험 판정은 유나의 8.25 FSM 설계에 이미 들어있는 severe_tilt(60도
-# 이상, 물 감지 센서 없이 즉시 반응)만 쓴다. sensor_input.py 상단
-# 주석 참고.
+# 현재 IMU를 사용하지 않으므로 기울기 기반 전복 판정은 비활성화되어 있다.
 #
 # --- ESCAPE 트리거 결정 (2026-08-25, 서연) ---
 # 창문이 실제로 열리는 순간(can_open_flag=True, 즉 LOW 즉시개방이든
@@ -52,8 +50,7 @@
 # fsm_controller.escalate_to_escape()를 호출해서 FSM 자체를 ESCAPE로
 # 승격시킨다. 전복(기울기, severe_tilt)은 이번 수조 실험(물 유입
 # 시나리오)의 핵심이 아니라고 판단해 ESCAPE 트리거에서는 제외했다 -
-# severe_tilt는 fsm_controller._decide_state()에서 기존대로 HIGH로만
-# 승격시키고, 거기서 F_net 게이트를 통과해야 ESCAPE로 넘어간다.
+# 현재 IMU를 사용하지 않으므로 이 경로에서는 severe_tilt가 발생하지 않는다.
 #
 # 2026-08-25 추가: ESCAPE는 처음엔 main.py가 output_state 변수로만
 # 따로 관리했는데("서연의 요구사항 정리" 페이지 참고), 서연이 "그냥
@@ -82,7 +79,7 @@ LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader(use_imu=True)
+    sensor_reader = sensor_input.SensorReader()
     output = output_controller.OutputController(output_controller.OutputConfig())
     try:
         sensor_reader.init()
@@ -90,7 +87,7 @@ def main():
         relay_controller.init()
         logger.init()
 
-        print("FLOODGUARD 통합 실행 시작 (실수위 센서·MPU6050·출력·릴레이 사용)")
+        print("FLOODGUARD 통합 실행 시작 (실수위 센서·출력·릴레이 사용, IMU 미사용)")
 
         while True:
             loop_start = time.monotonic()
