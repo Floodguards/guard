@@ -1,9 +1,10 @@
-"""Supervised real-motor trials used to estimate the opening-load boundary.
+"""Run and analyze supervised real-motor opening-boundary trials.
 
 This is intentionally separate from main.py.  It reads only the two water
 levels, never runs the FSM, Arduino, LCD, or automatic-opening path, and makes
 one relay pulse only after an operator types OPEN.  The physical target-open
-result is recorded by the operator because no position sensor exists.
+result is recorded by the operator because no position sensor exists. Use
+--analyze to summarize previously recorded trial results without actuating.
 """
 
 import argparse
@@ -11,6 +12,7 @@ import csv
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 import relay_controller
 import sensor_input
@@ -70,6 +72,11 @@ def _append_row(row, csv_path=CSV_FILE_NAME):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="실제 모터 개방 한계 추정용 감독하 시험 1회")
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="모터를 구동하지 않고 기존 시험 CSV만 분석합니다.",
+    )
     parser.add_argument("--arm-motor", action="store_true",
                         help="없으면 릴레이를 절대 켜지 않는 안전 잠금")
     parser.add_argument("--trial-id", help="비우면 실행 시각 기반 ID를 자동 생성")
@@ -77,8 +84,50 @@ def parse_args():
     return parser.parse_args()
 
 
+def analyze_trials(csv_path=CSV_FILE_NAME):
+    """Summarize the observed force bracket from recorded trials."""
+    path = Path(csv_path)
+    if not path.exists():
+        raise SystemExit(f"{path}이 없습니다.")
+
+    successes = []
+    failures = []
+    with path.open(newline="", encoding="utf-8") as file:
+        for row in csv.DictReader(file):
+            force_n = float(row["f_net_signed_n"])
+            if row["opened_to_target"] == "yes":
+                successes.append(force_n)
+            elif row["opened_to_target"] == "no":
+                failures.append(force_n)
+
+    print(f"성공 {len(successes)}회 / 실패 {len(failures)}회")
+    if successes:
+        print("가장 큰 성공 순수압: %.2f N" % max(successes))
+    if failures:
+        print("가장 작은 실패 순수압: %.2f N" % min(failures))
+
+    if successes and failures:
+        lower_n = max(successes)
+        upper_n = min(failures)
+        if lower_n < upper_n:
+            print(
+                "관측된 개방 한계 후보 구간: "
+                "%.2f N <= F_cap,actual < %.2f N" % (lower_n, upper_n)
+            )
+        else:
+            print("성공·실패 순서가 겹칩니다. 같은 수위차 조건을 3회 이상 재시험해야 합니다.")
+    elif successes:
+        print("현재 결과는 개방 한계의 하한만 보여 줍니다. 실패 조건이 아직 없습니다.")
+    else:
+        print("성공 조건이 아직 없습니다. 센서값·기구 걸림·통전시간을 먼저 확인하세요.")
+
+
 def main():
     args = parse_args()
+    if args.analyze:
+        analyze_trials()
+        return
+
     if not args.arm_motor:
         raise SystemExit("실제 모터 시험은 --arm-motor를 명시해야 합니다.")
     if TRIAL_RELAY_RUN_S > relay_controller.MAX_RUN_S:
@@ -138,6 +187,7 @@ def main():
             "note": args.note,
         })
         print(f"시험 결과를 {CSV_FILE_NAME}에 기록했습니다.")
+        analyze_trials()
     finally:
         if relay_ready:
             relay_controller.close()
