@@ -76,10 +76,13 @@ def main():
                 relay_result,
             )
 
+            f_net_display = (
+                f"{f_net_n:.2f}N" if f_net_n is not None else "N/A"
+            )
             print(
                 f"state={state} ({fsm_reason}) | h_out={data['h_out_cm']} | "
                 f"h_in={data['h_in_cm']} | valid={sensor_valid} | "
-                f"F_net={f_net_n:.2f}N | can_open={can_open} ({pressure_reason}) | "
+                f"F_net={f_net_display} | can_open={can_open} ({pressure_reason}) | "
                 f"relay={relay_result['relay_on']} ({relay_result['reason']})"
             )
 
