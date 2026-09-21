@@ -54,3 +54,25 @@ def run(can_open_flag, dry_run=DRY_RUN):
 
     _already_opened = True
     return {"relay_on": True, "already_opened": True, "reason": "relay_open_executed"}
+
+
+def run_trial_pulse(duration_s, dry_run=DRY_RUN):
+    """Run one supervised calibration pulse without changing the open latch.
+
+    This deliberately has no relationship to the FSM's automatic-opening
+    decision.  There is no position feedback, so the caller must record the
+    observed target-position result after the pulse.
+    """
+    if duration_s <= 0 or duration_s > MAX_RUN_S:
+        raise ValueError(f"통전 시간은 0초 초과 {MAX_RUN_S}초 이하여야 합니다.")
+
+    if dry_run or _relay is None:
+        print(f"[relay_controller][dry_run] 시험 릴레이 ON -> {duration_s}s 대기 -> OFF")
+        return {"relay_on": True, "reason": "trial_relay_dry_run"}
+
+    _relay.on()
+    try:
+        time.sleep(duration_s)
+    finally:
+        _relay.off()
+    return {"relay_on": True, "reason": "trial_relay_pulse_complete"}
