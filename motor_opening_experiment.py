@@ -134,7 +134,7 @@ def main():
         raise RuntimeError("고정 시험 통전 시간이 릴레이 안전 상한을 넘습니다.")
 
     trial_id = args.trial_id or "motor-" + datetime.now().strftime("%Y%m%d-%H%M%S")
-    reader = sensor_input.SensorReader(use_imu=False)
+    reader = sensor_input.SensorReader()
     relay_ready = False
     try:
         reader.init()
