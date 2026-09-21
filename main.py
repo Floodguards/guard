@@ -18,12 +18,11 @@
 # 적은 없다 - 유나 본인 문서에 있는 코드를 그대로 옮긴 것이라, 실제
 # 하드웨어에 연결해서 검증이 필요하다.
 #
-# normal 모드는 "LOW=즉시개방, MID/HIGH=F_net 조건부 개방" 구조다.
-# FLOODGUARD_MODE=experiment는 LOW 포함 모든 구동을 막고, 실제 센서와
-# F_net 및 MID/HIGH 개방 후보를 별도 CSV에 기록한다. FSM 상태 판단
-# (_decide_state) 로직
-# 자체는 2026-08-25부터 유나의 8.25 설계로 교체됐다 (fsm_controller.py
-# 상단 주석 참고) - 정연의 실제 코드와 다른 로직이니 정연 확인 필요.
+# 단일 통합 실행 경로: 실제 센서·IMU를 읽고 FSM/F_net 판단 후
+# Arduino/LCD 출력, 필요 시 릴레이 개방, 통합 CSV 기록을 수행한다.
+# 센서만 기록하는 실험은 별도 test2_low_sensor_csv.py를 사용한다.
+# FSM 상태 판단 (_decide_state) 로직 자체는 2026-08-25부터 유나의
+# 8.25 설계로 교체됐다 (fsm_controller.py 상단 주석 참고).
 #
 # --- 실행 전 반드시 확인할 미해결 항목 ---
 # 1. sensor_input.py의 캘리브레이션(sensor_calibration.json)을 빈
@@ -49,7 +48,7 @@
 # --- ESCAPE 트리거 결정 (2026-08-25, 서연) ---
 # 창문이 실제로 열리는 순간(can_open_flag=True, 즉 LOW 즉시개방이든
 # MID/HIGH F_net 조건부 개방이든 상관없이 "지금 열린다"고 판단된 순간,
-# normal 모드에 한함)
+# 통합 실행 경로에서만 호출한다)
 # fsm_controller.escalate_to_escape()를 호출해서 FSM 자체를 ESCAPE로
 # 승격시킨다. 전복(기울기, severe_tilt)은 이번 수조 실험(물 유입
 # 시나리오)의 핵심이 아니라고 판단해 ESCAPE 트리거에서는 제외했다 -
@@ -70,7 +69,6 @@
 # sensor_reader.init()/sensor_reader.read_all()로 호출하도록 바꿨다.
 # ============================================================
 
-import os
 import time
 
 import sensor_input
@@ -80,51 +78,24 @@ import output_controller
 import relay_controller
 import logger
 
-# 기본값은 안전을 위해 모의 실행이다.
-# 실제 하드웨어 테스트 때만 FLOODGUARD_DRY_RUN=0으로 실행한다.
-DRY_RUN = os.getenv("FLOODGUARD_DRY_RUN", "1") != "0"
-# 실제 센서 실행에서는 MPU6050도 함께 읽는다. DRY_RUN에서는 하드웨어를
-# 초기화하지 않는다.
-# experiment 모드는 실제 센서를 기록하되 릴레이·LCD·Arduino 출력을
-# 초기화하거나 작동하지 않는다. 기본 동작은 기존 normal 모드다.
-MODE = os.getenv("FLOODGUARD_MODE", "normal").strip().lower()
-EXPERIMENT_MODE = MODE == "experiment"
-# 수압 실험은 기본적으로 IMU 없이 진행할 수 있다. IMU가 준비되면
-# FLOODGUARD_USE_IMU=1로 켤 수 있으며, normal 모드 기본값은 기존대로 사용한다.
-USE_IMU = os.getenv(
-    "FLOODGUARD_USE_IMU", "0" if EXPERIMENT_MODE else "1"
-) != "0"
 LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    if MODE not in ("normal", "experiment"):
-        raise ValueError("FLOODGUARD_MODE는 normal 또는 experiment여야 합니다.")
-    if EXPERIMENT_MODE and DRY_RUN:
-        raise ValueError(
-            "experiment 모드는 실제 센서 측정을 위해 FLOODGUARD_DRY_RUN=0이 필요합니다."
-        )
-
-    sensor_reader = sensor_input.SensorReader(dry_run=DRY_RUN, use_imu=USE_IMU)
-    sensor_reader.init()
-    output = None
-    if not EXPERIMENT_MODE:
-        output = output_controller.OutputController(
-            output_controller.OutputConfig(dry_run=DRY_RUN)
-        )
-        output.init()
-        relay_controller.init(dry_run=DRY_RUN)
-    logger.init(experiment_mode=EXPERIMENT_MODE)
-
-    print(
-        "FLOODGUARD 시작 (mode=%s, dry_run=%s, imu=%s)"
-        % (MODE, DRY_RUN, sensor_reader.use_imu)
+    sensor_reader = sensor_input.SensorReader(dry_run=False, use_imu=True)
+    output = output_controller.OutputController(
+        output_controller.OutputConfig(dry_run=False)
     )
-
     try:
+        sensor_reader.init()
+        output.init()
+        relay_controller.init(dry_run=False)
+        logger.init()
+
+        print("FLOODGUARD 통합 실행 시작 (실센서·IMU·출력·릴레이 사용)")
+
         while True:
             loop_start = time.monotonic()
-
             data = sensor_reader.read_all()
 
             state, fsm_reason, sensor_valid = fsm_controller.update(
@@ -139,55 +110,16 @@ def main():
                 severe_tilt=data["severe_tilt"],
             )
 
-            # 2026-08-25: rollover_detected(GPIO27 물감지센서 기반) 로직은
-            # 삭제함 (위 헤더 주석 참고). fsm_controller._decide_state()의
-            # severe_tilt(60도+h_out>=1cm 즉시 HIGH) 하나로 전복 위험을
-            # 판정한다 - 여기서 별도로 state를 덮어쓰지 않는다.
-
-            # can_open_flag를 먼저 계산해야 ESCAPE 승격 여부를 정할 수
-            # 있다 (이전 버전은 lcd_display 호출 뒤에 계산해서 lcd_display
-            # 내부에서 별도로 다시 계산하는 구조였다 - 이번에 순서를 바꿈).
-            f_net_n = pressure_balance.compute_f_net_n(
-                data["h_out_cm"], data["h_in_cm"]
+            # can_open_flag를 먼저 계산해야 ESCAPE 승격 여부를 정할 수 있다.
+            can_open_flag, f_net_n, pressure_reason = pressure_balance.can_open(
+                state, data["h_out_cm"], data["h_in_cm"]
             )
-            if EXPERIMENT_MODE:
-                # LOW의 즉시 개방은 실험 중 실행하지 않는다. MID/HIGH의
-                # 압력 균형 조건은 CSV에 후보 시점으로 기록만 한다.
-                if not sensor_valid:
-                    can_open_flag, pressure_reason = False, "experiment_sensors_invalid"
-                elif state in ("MID", "HIGH"):
-                    can_open_flag, _, pressure_reason = pressure_balance.can_open(
-                        state, data["h_out_cm"], data["h_in_cm"]
-                    )
-                    pressure_reason = "experiment_candidate_" + pressure_reason
-                elif state == "LOW":
-                    can_open_flag, pressure_reason = False, "experiment_low_open_suppressed"
-                else:
-                    can_open_flag, pressure_reason = False, "experiment_waiting_for_mid_high"
-            else:
-                can_open_flag, f_net_n, pressure_reason = pressure_balance.can_open(
-                    state, data["h_out_cm"], data["h_in_cm"]
-                )
 
-            # 2026-08-25: 개방 판정이 True가 된 순간 fsm_controller를
-            # ESCAPE로 승격시킨다. 이미 ESCAPE인 경우(래치됨) 다시 호출
-            # 안 해도 되지만, escalate_to_escape()는 멱등이라 그냥
-            # 매번 불러도 안전하다.
-            if not EXPERIMENT_MODE and can_open_flag and state != "ESCAPE":
+            if can_open_flag and state != "ESCAPE":
                 state, fsm_reason = fsm_controller.escalate_to_escape()
 
-            # lcd_display.update_state()가 내부적으로 serial_sender.send_state()도
-            # 호출한다 (승현의 원본 설명: "상태 바뀔 때마다 시리얼 송신 + LCD 갱신
-            # 동시에"). 여기서 serial_sender를 따로 또 부르지 않는다.
-            if not EXPERIMENT_MODE:
-                output.update_state(state, data["h_out_cm"], data["h_in_cm"])
-                relay_result = relay_controller.run(can_open_flag, dry_run=DRY_RUN)
-            else:
-                relay_result = {
-                    "relay_on": False,
-                    "already_opened": False,
-                    "reason": "experiment_mode_no_actuation",
-                }
+            output.update_state(state, data["h_out_cm"], data["h_in_cm"])
+            relay_result = relay_controller.run(can_open_flag, dry_run=False)
 
             logger.log(
                 data, state, fsm_reason, sensor_valid,
@@ -210,9 +142,8 @@ def main():
 
     finally:
         sensor_reader.shutdown()
-        if output is not None:
-            output.close()
-            relay_controller.close()
+        output.close()
+        relay_controller.close()
         logger.close()
 
 
