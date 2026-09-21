@@ -28,15 +28,19 @@
 # "내부용"을 맡는다 - h_in_cm이 이제 실제로 측정된다. 이 부분은
 # A의 담당 영역이고 B/C 코드와 충돌이 없어서 확인 즉시 반영했다.
 #
-# 현재 설정: 수위 입력은 실제 A02YYUW/HC-SR04P에서 읽고, IMU는 읽지
-# 않는다. roll/pitch는 FSM 인터페이스 호환을 위해 0도로 전달한다.
+# !! 변경 2: roll/pitch를 분리해서 계산함 !!
+# 이전 버전은 tilt_deg 하나만 계산해서 roll_deg/pitch_deg 둘 다에
+# 똑같이 넣는 임시방편이었다(불일치 보고서 4번 참고, A에게 "IMU에서
+# roll/pitch를 분리해서 계산하는지 확인 필요"라고 요청해뒀던 항목).
+# 새 버전은 가속도 벡터에서 roll/pitch를 각각 계산한다. 서연 확인
+# (2026-08-25): "유나가 롤/피치 분리했으니 이걸로 따라간다"고 결정함.
 #
 # !! 임계값 관련 !!
 # 유나의 8.25 페이지 원문: "위 각도는 실험 전 초기 설정값이며, 차량
 # 모형을 실제로 기울여 센서 오차를 확인한 후 수정한다" / "1cm, 6cm,
 # 14cm, 0.3cm/s, 20도, 60도는 검증된 실제 차량 안전기준이 아니라
-# 30cm 높이 모형의 초기 실험값이다." fsm_controller.py의 FsmThresholds는
-# 전부 잠정치다. IMU 미사용 상태에서는 기울기 임계값을 판정할 수 없다.
+# 30cm 높이 모형의 초기 실험값이다." 즉 아래 SONAR_VALID_TILT_DEG,
+# SEVERE_TILT_DEG와 fsm_controller.py의 FsmThresholds는 전부 잠정치.
 # window_width_m/pressure_threshold_n과 같은 성격이라 fsm_controller.py
 # 쪽에 통합 TODO 표로 정리해뒀다 (README_불일치보고서.md 10번 참고).
 #
@@ -82,12 +86,15 @@
 # 메서드 이름은 read_all()/init()/shutdown() 등 기존 이름을 그대로
 # 유지했다 (문서의 read_sensor_data()라는 이름과는 다름 - main.py와
 # fsm_controller.py 쪽 호출부 변경을 최소화하기 위한 선택).
-# 현재 SensorReader는 수위 센서만 초기화하며 I2C/MPU6050을 열지 않는다.
+# 부수 효과: 이전에는 모듈을 import하는 순간 SMBus(1)을 실제로 열어서
+# 하드웨어에 접근했는데(테스트 시 항상 스텁 필요), 이제는
+# SensorReader()를 생성하는 시점으로 미뤄졌다 - 더 안전한 방식이다.
 # main.py도 sensor_reader = sensor_input.SensorReader() 인스턴스를
 # 만들어서 쓰도록 함께 바꿨다 (main.py 상단 주석 참고).
 # ============================================================
 
 import json
+import math
 import os
 import time
 from collections import deque
@@ -102,13 +109,21 @@ try:
 except ImportError:
     DistanceSensor = None
 
+try:
+    from smbus import SMBus
+except ImportError:
+    SMBus = None
+
 
 # ----- 이동평균/추세 윈도우 -----
 DISTANCE_FILTER_SIZE = 5
 TREND_WINDOW_SIZE = 15
 RISING_SPEED_THRESHOLD_CM_S = 0.3  # TODO(잠정치): 유나 8.25 문서 기준, 수조 실험 후 조정
 
-# IMU를 사용하지 않으므로 roll/pitch는 중립값으로 FSM에 전달한다.
+# ----- IMU 필터/판정 (TODO 잠정치: fsm_controller.py의 통합 표 참고) -----
+ACCEL_LPF_ALPHA = 0.15
+SONAR_VALID_TILT_DEG = 20.0   # TODO(잠정치): 유나 8.25 문서 "20도" 초기 실험값
+SEVERE_TILT_DEG = 60.0        # TODO(잠정치): 유나 8.25 문서 "60도" 초기 실험값
 
 # ----- A02YYUW (외부 수위, UART) -----
 # 배선(유나 8.25 문서 4.2): VCC->Pi 3.3V(물리핀17), GND->물리핀20,
@@ -133,11 +148,16 @@ HC_SR04P_TRIGGER_GPIO = 23
 HC_SR04P_ECHO_GPIO = 24
 HC_SR04P_MAX_DISTANCE_M = 0.5  # 30cm 모형 기준 여유치
 
+MPU6050_ADDRESS = 0x68
+MPU6050_ACCEL_REGISTER = 0x3B
+
 # ----- 캘리브레이션 파일 (유나 8.25 문서 7.2) -----
 CALIBRATION_FILE = "calibration/sensor_calibration.json"
 DEFAULT_CALIBRATION = {
     "outside_base_distance_cm": 30.0,   # TODO: 실측 후 교체 (init()에서 캘리브레이션 시 갱신)
     "inside_base_distance_cm": 30.0,    # TODO: 실측 후 교체
+    "baseline_roll_deg": 0.0,
+    "baseline_pitch_deg": 0.0,
 }
 
 
@@ -179,21 +199,45 @@ def calculate_rise_rate(history):
     return numerator / denominator
 
 
+def vector_to_roll_pitch_deg(accel_vector):
+    ax, ay, az = accel_vector
+    roll = math.degrees(math.atan2(ay, az))
+    pitch = math.degrees(math.atan2(-ax, math.sqrt(ay ** 2 + az ** 2)))
+    return roll, pitch
+
+
+def _convert_signed_16bit(high_byte, low_byte):
+    value = (high_byte << 8) | low_byte
+    if value >= 0x8000:
+        value -= 65536
+    return value
+
+
 # ============================================================
 # SensorReader - 센서 상태를 들고 있는 클래스 (2026-08-25 일곱
 # 번째 갱신: 위 헤더 "변경 5" 참고, 실제 code_A.zip 구조를 따름)
 # ============================================================
 
 class SensorReader:
-    def __init__(self):
+    def __init__(self, use_imu=False):
+        self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
         self.inside_sensor = None   # gpiozero.DistanceSensor (HC-SR04P, 내부), init()에서 생성
+        self.i2c_bus = None
+
+        if self.use_imu:
+            if SMBus is None:
+                raise RuntimeError("smbus is required for real sensor input")
+            self.i2c_bus = SMBus(1)
+            self.i2c_bus.write_byte_data(MPU6050_ADDRESS, 0x6B, 0x00)
+            time.sleep(0.1)
 
         self.outside_distance_buffer = deque(maxlen=DISTANCE_FILTER_SIZE)
         self.inside_distance_buffer = deque(maxlen=DISTANCE_FILTER_SIZE)
         self.outside_trend_buffer = deque(maxlen=TREND_WINDOW_SIZE)
         self.inside_trend_buffer = deque(maxlen=TREND_WINDOW_SIZE)
 
+        self.filtered_accel_vector = None
         self._calibration = dict(DEFAULT_CALIBRATION)
 
     # ----- 캘리브레이션 (유나 8.25 문서 7절) -----
@@ -212,7 +256,9 @@ class SensorReader:
             json.dump(self._calibration, f, indent=2)
 
     def calibrate_empty_tank(self, sample_count=30):
-        """수조가 빈 상태에서 외부/내부 수위 센서 기준값을 저장한다."""
+        """수조가 빈 상태에서 호출. 외부(A02YYUW)/내부(HC-SR04P) 거리
+        기준값 + IMU 기준 roll/pitch를 저장한다 (유나 8.25 문서 7.1
+        캘리브레이션 방법)."""
         outside_samples = []
         inside_samples = []
         for _ in range(sample_count):
@@ -224,6 +270,13 @@ class SensorReader:
                 inside_samples.append(d_in)
             time.sleep(0.05)
 
+        if self.use_imu:
+            baseline_vector = self.calibrate_initial_orientation()
+            baseline_roll, baseline_pitch = vector_to_roll_pitch_deg(baseline_vector)
+        else:
+            # 수압 실험 등 IMU를 제외한 단계에서는 중립 자세를 기준으로 둔다.
+            baseline_roll = baseline_pitch = 0.0
+
         minimum_samples = max(1, sample_count // 2)
         if len(outside_samples) < minimum_samples:
             raise RuntimeError("외부 A02YYUW 캘리브레이션 측정값이 부족하다.")
@@ -233,6 +286,8 @@ class SensorReader:
         self._calibration = {
             "outside_base_distance_cm": sum(outside_samples) / len(outside_samples),
             "inside_base_distance_cm": sum(inside_samples) / len(inside_samples),
+            "baseline_roll_deg": baseline_roll,
+            "baseline_pitch_deg": baseline_pitch,
         }
         self.save_calibration()
         return self._calibration
@@ -273,6 +328,46 @@ class SensorReader:
         if distance_m is None:
             return None
         return distance_m * 100.0
+
+    # ----- MPU6050 / roll·pitch 분리 계산 -----
+    #
+    # !! 2026-08-25 변경 !! 이전 버전은 기준 중력벡터와의 각도차이
+    # 하나(tilt_deg)만 계산해서 roll/pitch에 똑같이 넣었다. 유나가
+    # roll/pitch를 분리했다고 확인해서, 표준 가속도계 tilt 공식으로
+    # roll/pitch를 각각 계산하도록 바꿨다:
+    #   roll  = atan2(ay, az)
+    #   pitch = atan2(-ax, sqrt(ay^2 + az^2))
+    # 계산된 값에서 캘리브레이션 시점의 baseline_roll/pitch를 빼서
+    # "상대 기울기"를 구한다 (유나 8.25 문서 11절과 동일한 방식).
+
+    def read_mpu6050(self):
+        data = self.i2c_bus.read_i2c_block_data(MPU6050_ADDRESS, MPU6050_ACCEL_REGISTER, 14)
+        accel = tuple(_convert_signed_16bit(data[i], data[i + 1]) / 16384.0 for i in (0, 2, 4))
+        gyro = tuple(_convert_signed_16bit(data[i], data[i + 1]) / 131.0 for i in (8, 10, 12))
+        return {"accel": accel, "gyro": gyro}
+
+    def apply_accelerometer_low_pass(self, acceleration):
+        if self.filtered_accel_vector is None:
+            self.filtered_accel_vector = acceleration
+            return self.filtered_accel_vector
+        alpha = ACCEL_LPF_ALPHA
+        self.filtered_accel_vector = tuple(
+            alpha * acceleration[i] + (1 - alpha) * self.filtered_accel_vector[i]
+            for i in range(3)
+        )
+        return self.filtered_accel_vector
+
+    def calibrate_initial_orientation(self, sample_count=100):
+        accel_sum = [0.0, 0.0, 0.0]
+        print("MPU6050 기준 자세를 보정한다. 차량 모형을 움직이지 않는다.")
+        for _ in range(sample_count):
+            acceleration = self.read_mpu6050()["accel"]
+            for i in range(3):
+                accel_sum[i] += acceleration[i]
+            time.sleep(0.01)
+        average_vector = tuple(v / sample_count for v in accel_sum)
+        print("MPU6050 기준 자세 보정을 완료하였다.")
+        return average_vector
 
     # ----- 초기화 / 메인 루프 -----
 
@@ -328,14 +423,40 @@ class SensorReader:
         rise_rate_out_cm_s = calculate_rise_rate(list(self.outside_trend_buffer))
         rise_rate_in_cm_s = calculate_rise_rate(list(self.inside_trend_buffer))
 
-        # IMU를 읽지 않는 구성: 기울기 입력은 중립값으로 유지한다.
-        roll_deg = pitch_deg = 0.0
-        imu_valid = True
+        # ----- 기울기 (roll/pitch 분리) -----
+        if self.use_imu:
+            try:
+                mpu_data = self.read_mpu6050()
+                filtered_acceleration = self.apply_accelerometer_low_pass(mpu_data["accel"])
+                measured_roll_deg, measured_pitch_deg = vector_to_roll_pitch_deg(filtered_acceleration)
+                roll_deg = measured_roll_deg - self._calibration["baseline_roll_deg"]
+                pitch_deg = measured_pitch_deg - self._calibration["baseline_pitch_deg"]
+                imu_valid = True
+            except Exception:
+                roll_deg = pitch_deg = 0.0
+                imu_valid = False
+        else:
+            # MPU6050을 아직 사용하지 않는 실험 단계에서는 수평으로 가정한다.
+            roll_deg = pitch_deg = 0.0
+            imu_valid = True
 
         outside_valid = outside_raw_cm is not None
         inside_valid = inside_raw_cm is not None
-        sonar_valid = outside_valid and inside_valid
-        severe_tilt = False
+        sonar_valid = (
+            outside_valid
+            and inside_valid
+            and (not self.use_imu or imu_valid)
+            and abs(roll_deg) <= SONAR_VALID_TILT_DEG
+            and abs(pitch_deg) <= SONAR_VALID_TILT_DEG
+        )
+        severe_tilt = (
+            self.use_imu
+            and imu_valid
+            and (
+                abs(roll_deg) >= SEVERE_TILT_DEG
+                or abs(pitch_deg) >= SEVERE_TILT_DEG
+            )
+        )
 
         # 2026-08-25 여섯 번째 갱신: 문서 14절 SensorData와 대조해서 추가
         # (위 헤더 "변경 4" 참고).
@@ -369,3 +490,5 @@ class SensorReader:
             self.outside_serial.close()
         if self.inside_sensor is not None:
             self.inside_sensor.close()
+        if self.i2c_bus is not None:
+            self.i2c_bus.close()
