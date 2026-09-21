@@ -134,8 +134,12 @@ OUTSIDE_SERIAL_PORT = "/dev/serial0"
 OUTSIDE_SERIAL_BAUDRATE = 9600
 
 # ----- HC-SR04P (내부 수위, GPIO TRIG/ECHO) -----
-# 배선(유나 8.25 문서 4.1): VCC->Pi 3.3V(물리핀1), GND->물리핀14,
-# TRIG->GPIO23(물리핀16), ECHO->GPIO24(물리핀18).
+# 배선(현재 사용자가 연결한 레벨 시프터 구성 기준): 센서 VCC->Pi 5V
+# (물리핀 2 또는 4), 센서 GND/Pi GND/시프터 GND 공통.
+# 시프터 HV->Pi 5V, LV->Pi 3.3V.
+# Pi GPIO23(물리핀16)->LV1, HV1->센서 TRIG;
+# 센서 ECHO->HV2, LV2->Pi GPIO24(물리핀18).
+# GPIO 핀 번호와 gpiozero 설정은 변하지 않는다.
 # 비방수 센서라서 내부 수면 위쪽에 설치하고, 물이 직접 튀지 않도록
 # 보호 덮개를 씌운다 (덮개가 초음파 송수신부를 막으면 안 됨).
 # gpiozero.DistanceSensor가 트리거 펄스 발사 + 에코 시간 측정을
@@ -215,7 +219,7 @@ def _convert_signed_16bit(high_byte, low_byte):
 # ============================================================
 
 class SensorReader:
-    def __init__(self, dry_run=True, use_imu=False):
+    def __init__(self, dry_run=True, use_imu=True):
         self.dry_run = dry_run
         self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
@@ -436,6 +440,8 @@ class SensorReader:
         if h_out_cm is not None:
             self.outside_trend_buffer.append((loop_time, h_out_cm))
         if h_in_cm is not None:
+            # 상승률 표본은 FSM 상태(LOW/MID 등)와 무관하게 첫 측정부터 쌓는다.
+            # 다섯 표본이 모이면 calculate_rise_rate()가 기울기를 계산한다.
             self.inside_trend_buffer.append((loop_time, h_in_cm))
 
         rise_rate_out_cm_s = calculate_rise_rate(list(self.outside_trend_buffer))

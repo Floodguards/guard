@@ -17,10 +17,10 @@
 # 2) _is_sensor_valid는 롤/피치 기울기만 확인한다 (max(|roll|,|pitch|)
 #    <= invalid_tilt_deg). h_out 음수 체크나 imu_valid 플래그 체크는
 #    실제 코드에 없었다 - 예전 재구성에서 내가 임의로 추가한 것.
-# 3) h_out_cm이 None인 경우에 대한 방어 코드가 없다 - 실제 코드는
-#    h_out_cm이 항상 유효한 숫자라고 가정한다. h_in_cm은 애초에
-#    _decide_state에서 아예 쓰지 않는다 (F_net 계산은 pressure_balance.py의
-#    몫이고, FSM 단계 판단 자체는 h_out_cm/rise_rate_cm_s/기울기만 봄).
+# 3) h_out_cm이 None인 경우 실제 원본 코드에는 방어 코드가 없었다.
+#    현재 함수형 래퍼는 None을 걸러 이전 상태를 유지한다.
+# 4) 2026-09-21: 수조 실험에서는 상승률을 기록하되 FSM 전환 조건에서는
+#    사용하지 않기로 함. MID는 외부/내부 수위 높이 기준으로 판정한다.
 #
 # 2026-08-25 추가: ESCAPE를 FloodState의 다섯 번째 상태로 승격함
 # (서연 결정 - main.py에서 output_state로 따로 관리하지 않고, FSM
@@ -65,7 +65,6 @@
 # │ low_level_cm             │ 1cm    │ IDLE→LOW 전환 h_out 기준   │
 # │ mid_level_out_cm         │ 6cm    │ MID 전환 h_out 기준        │
 # │ mid_level_in_cm          │ 1cm    │ MID 전환 h_in 기준         │
-# │ mid_rise_in_cm_s         │ 0.3cm/s│ MID 전환 h_in 상승속도 기준│
 # │ high_level_cm            │ 14cm   │ HIGH 전환 h_out/h_in 기준  │
 # │ sonar_valid_tilt_deg     │ 20도   │ 초음파 신뢰 가능 기울기 한계│
 # │ severe_tilt_deg          │ 60도   │ 전복 위험 판정 기울기       │
@@ -103,7 +102,6 @@ class FsmThresholds:
     low_level_cm: float = 1.0
     mid_level_out_cm: float = 6.0
     mid_level_in_cm: float = 1.0
-    mid_rise_in_cm_s: float = 0.3
     high_level_cm: float = 14.0
     sonar_valid_tilt_deg: float = 20.0
     severe_tilt_deg: float = 60.0
@@ -163,11 +161,10 @@ class FloodguardFsm:
         if data.h_out_cm >= t.high_level_cm or data.h_in_cm >= t.high_level_cm:
             return FloodState.HIGH, "h_out_or_h_in_reached_high_level"
 
-        # 5) 바깥 수위, 안쪽 수위, 안쪽 상승속도 중 하나라도 MID 기준이면 MID
+        # 5) 바깥/안쪽 수위 중 하나라도 MID 기준이면 MID
         if (
             data.h_out_cm >= t.mid_level_out_cm
             or data.h_in_cm >= t.mid_level_in_cm
-            or data.rise_rate_in_cm_s >= t.mid_rise_in_cm_s
         ):
             return FloodState.MID, "mid_condition_met"
 
@@ -213,10 +210,9 @@ def update(
 ):
     """센서값으로 위험 단계를 판단한다. (state, reason, sensor_valid) 반환.
 
-    2026-08-25 갱신: 유나의 새 sensor_input.py가 rise_rate_in_cm_s/
-    sonar_valid/severe_tilt를 함께 넘겨주므로 파라미터를 추가했다.
-    rise_rate_cm_s(외부 상승속도)는 이제 _decide_state에서 직접 쓰이지
-    않지만 main.py/logger.py 호환을 위해 인자는 남겨뒀다.
+    2026-08-25 갱신: sensor_input.py와의 호환을 위해 상승률 인자를 받는다.
+    2026-09-21 기준 상승률 값은 계속 전달/기록하지만 FSM 상태 전환에는
+    사용하지 않는다. MID/HIGH는 수위 높이와 기울기 조건으로 판단한다.
 
     실제 FloodguardFsm은 h_out_cm이 항상 유효한 숫자라고 가정한다
     (None 방어 코드 없음). h_out_cm이 None이면 여기서 걸러서 이전

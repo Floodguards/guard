@@ -1,28 +1,23 @@
 # ============================================================
 # pressure_balance.py
-# 2026-08-25: 정연(B)의 실제 실행 로그(터미널)로 확인함.
-# f_net_n은 상태와 무관하게 항상 계산됨(IDLE도 f_net=0.00N으로
-# 찍힘). window_width_m 역산 결과 정연 코드는 아직 0.152 사용중
-# 인 게 확인됨. 포맥스판의 수압 작용 면 가로 길이는 37cm로 확정했다.
+# 2026-08-25 historical note: 당시 정연(B)의 실제 실행 로그에서
+# f_net_n 계산을 확인했으며, 그때의 37cm 사각판/폭 가정은 아래
+# 2026-09-21 trapezoid remeasurement update로 대체됐다.
 #
 # 기존 F_net ≤ 57.7N은 μ=0.83 가정에 따른 계산 추정치였다.
-# 2026-09-20 사용자가 제공한 참고 이미지에 따라 포맥스-PVC/철판 접촉의
-# 설계 입력값을 μ_s=0.45, μ_k=0.40으로 채택했다. 판 질량은
-# 37×21.7×0.4cm, 밀도 0.55g/cm³ 가정으로 약 0.1766kg 추정했다.
-# (50.4N - 0.1766kg×9.8m/s²) / 0.45 ≈ 108.2N으로 재산정했다.
-# 마찰계수는 이미지 참고값이며 제조사 공식값/젖은 실측값이 아니다.
-# 실제 가이드 법선반력·모터 전달효율·판 질량을 확인 전 계산 추정치다.
+# 2026-09-21 재측정: 패널 아래폭 33.3cm, 위폭 36.4cm,
+# 높이 21.7cm, 두께 3mm다. 요청한 단순 근사로 평균 폭을 사용한다:
+# (33.3+36.4)/2 = 34.85cm. 사다리꼴 폭 변화 적분은 사용하지 않는다.
+# 판 밀도 0.55g/cm³, 구동력 50.4N, μ_s=0.60은 설계 가정이다.
+# 평균 폭 기준 부피 약 226.87cm³, 추정 질량 약 0.1248kg,
+# 이전 식 계산값 (50.4 - 0.1248×9.8)/0.60 ≈ 81.96N은 참고값이다.
+# 현재 임계값은 요청에 따라 68.7N으로 임시 설정했다.
+# μ_k=0.30으로 구한 약 163.9N은 운동 시작 뒤 참고값일 뿐 개방 기준이 아니다.
 #
-# 2026-08-25 추가 수정 1 (정연의 "개방 판단" 로직 문서/스크린샷 기준):
-# 1) "안쪽 수위가 바깥쪽보다 높게 들어오는 이상 상황에서는 음수 힘이
-#    나오지 않도록 처리" - h_out_m**2 - h_in_m**2가 음수가 되면 0으로
-#    클램프하도록 compute_f_net_n()을 수정함.
-#
-#    WINDOW_WIDTH_M=0.37m(포맥스판 수압 작용 면 가로 길이 37cm)는 확정값이다.
-#    μ_s=0.45, μ_k=0.40은 제공 이미지의 포맥스-PVC/철판 참고값을 채택한
-#    설계 입력값이다. 공식 제품별 마찰자료나 젖은 실측값은 아니므로 검증 전이다.
-#    PRESSURE_THRESHOLD_N=108.2N은 판 질량 0.1766kg 추정 및 종전 구동력 가정으로
-#    재산정한 잠정값이다.
+# 2026-08-25 historical model (superseded 2026-09-21): rectangular width
+# 0.37m and PRESSURE_THRESHOLD_N=108.2N. Current dimensions/model are the
+# average-width approximation and pressure expression below.
+# Negative net pressure remains clamped to zero, per the original policy.
 # 2) "알 수 없는 상태: 열지 않음"이 개방 판단표에 명시되어 있어서,
 #    should_open_window()에 IDLE/LOW/MID/HIGH/ESCAPE가 아닌 상태가
 #    들어오면 명시적으로 False를 반환하도록 unknown-state 분기를
@@ -38,27 +33,35 @@
 RHO_WATER = 1000.0
 G = 9.8
 
-# 포맥스판 수압 작용 면 가로 길이는 37cm로 확정되었다.
-# 이미지 참고 설계 입력값: 포맥스(PVC)-철판 μ_s=0.45, μ_k=0.40.
-# 실제 가이드가 철판인지, 젖은 조건에서 유효한지는 실물 확인/실험 전이다.
-# 최대 선형 구동력 50.4N, 판 질량 0.1766kg(밀도 0.55g/cm³ 가정)을 적용하면
-# (50.4 - 0.1766×9.8) / 0.45 ≈ 108.2N. 이는 F_net이 가이드 법선반력에
-# 직접 대응한다는 가정의 계산 추정치이며, 수조/구동부 검증 전 잠정값이다.
-WINDOW_WIDTH_M = 0.37
-STATIC_FRICTION_COEFF = 0.45   # 제공 이미지의 포맥스-PVC/철판 참고값 (가정)
-KINETIC_FRICTION_COEFF = 0.40  # 제공 이미지의 포맥스-PVC/철판 참고값 (가정)
-PRESSURE_THRESHOLD_N = 108.2   # 계산 추정치: 실제 구조 및 실험 검증 필요
+# 판 치수 실측값. 수압 계산은 요청에 따라 평균 폭 근사를 쓴다.
+PANEL_HEIGHT_M = 0.217
+PANEL_BOTTOM_WIDTH_M = 0.333
+PANEL_TOP_WIDTH_M = 0.364
+WINDOW_WIDTH_M = (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
+PANEL_THICKNESS_M = 0.003
+PANEL_DENSITY_KG_M3 = 550.0  # 0.55g/cm³ 가정, 실측 전
+PANEL_AREA_M2 = PANEL_HEIGHT_M * (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
+PANEL_VOLUME_M3 = PANEL_AREA_M2 * PANEL_THICKNESS_M
+PANEL_MASS_KG = PANEL_VOLUME_M3 * PANEL_DENSITY_KG_M3
+
+# 설계 추정 입력값: μ_s=0.60, μ_k=0.30. 실제 접촉 조합·젖은 조건의 실측값은 아니다.
+# 최대 선형 구동력과 패널 무게로 계산한 값과 별도로, 현재 임계값은 임시 지정값이다.
+MAX_LINEAR_DRIVE_FORCE_N = 50.4
+STATIC_FRICTION_COEFF = 0.60   # 사용자 지정 설계 추정값; 실제 조합 실측 전
+KINETIC_FRICTION_COEFF = 0.30  # PVC 접촉 실험값을 참고한 설계 추정값
+PRESSURE_THRESHOLD_N = (
+    68.7
+)  # 사용자 지정 임시 임계값(N); 구조 및 실험 검증 필요
 
 
 def compute_f_net_n(h_out_cm, h_in_cm):
-    """F_net = 1/2 * rho * g * width * (h_out^2 - h_in^2), 단위: N.
-    안쪽 수위가 바깥쪽보다 높은 이상 상황에서는 0으로 클램프한다."""
+    """평균 폭 근사로 계산한 순수압력(N); 수위 단위는 cm."""
     h_out_m = (h_out_cm or 0.0) / 100.0
     h_in_m = (h_in_cm or 0.0) / 100.0
-    diff = h_out_m ** 2 - h_in_m ** 2
+    diff = 0.5 * RHO_WATER * G * WINDOW_WIDTH_M * (h_out_m ** 2 - h_in_m ** 2)
     if diff < 0:
         diff = 0.0
-    return 0.5 * RHO_WATER * G * WINDOW_WIDTH_M * diff
+    return diff
 
 
 def should_open_window(state, h_out_cm, h_in_cm):
