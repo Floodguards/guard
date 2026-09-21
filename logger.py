@@ -42,6 +42,7 @@ _HEADER = [
 
 _file = None
 _writer = None
+_active_csv_file_name = CSV_FILE_NAME
 
 
 def _value_or_blank(sensor_data, key):
@@ -49,10 +50,16 @@ def _value_or_blank(sensor_data, key):
     return "" if value is None else value
 
 
-def init():
-    global _file, _writer
-    write_header = not os.path.exists(CSV_FILE_NAME) or os.path.getsize(CSV_FILE_NAME) == 0
-    _file = open(CSV_FILE_NAME, "a", newline="")
+def init(experiment_mode=False):
+    global _file, _writer, _active_csv_file_name
+    _active_csv_file_name = (
+        "floodguard_experiment_log.csv" if experiment_mode else CSV_FILE_NAME
+    )
+    write_header = (
+        not os.path.exists(_active_csv_file_name)
+        or os.path.getsize(_active_csv_file_name) == 0
+    )
+    _file = open(_active_csv_file_name, "a", newline="")
     _writer = csv.writer(_file)
     if write_header:
         _writer.writerow(_HEADER)
