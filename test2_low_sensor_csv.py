@@ -1,9 +1,8 @@
-"""Record live sensor readings and FSM state for experiment 2.
+"""Record sensor readings and actuate once when the MID/HIGH pressure gate passes.
 
-This standalone recorder reads the two water-level sensors (IMU disabled),
-then appends readings to a dedicated CSV. It never initializes or calls the
-Arduino/output controller or the relay controller, so LOW cannot actuate
-the window during this test.
+This test reads the two water-level sensors with IMU disabled and appends each
+sample to a dedicated CSV. In MID/HIGH, it runs the relay once when the
+pressure threshold passes and the outside level is not below the inside level.
 """
 
 import argparse
@@ -14,10 +13,11 @@ from datetime import datetime
 
 import fsm_controller
 import pressure_balance
+import relay_controller
 import sensor_input
 
 
-DEFAULT_CSV = "floodguard_test2_low_sensor_log.csv"
+DEFAULT_CSV = "floodguard_test2_threshold_motor_log.csv"
 LOOP_INTERVAL_S = 0.2
 
 FIELDNAMES = [
@@ -44,6 +44,7 @@ FIELDNAMES = [
     "f_net_n",
     "pressure_threshold_n",
     "pressure_threshold_passed",
+    "threshold_reached_at",
     "pressure_reason",
     "actuation",
 ]
@@ -51,7 +52,7 @@ FIELDNAMES = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="LOW 수조 센서 기록 전용 테스트 (릴레이/출력 구동 없음)"
+        description="센서 기록 및 MID/HIGH 임계값 통과 시 모터 1회 구동 테스트"
     )
     parser.add_argument(
         "--csv",
@@ -68,53 +69,72 @@ def parse_args():
 
 
 def pressure_snapshot(state, h_out_cm, h_in_cm):
-    """Report the pressure gate without initializing or actuating outputs."""
+    """Return force, reason, threshold flag, and one-shot open decision."""
     if h_out_cm is None or h_in_cm is None:
-        return "", "sensor_value_unavailable", ""
+        return "", "sensor_value_unavailable", "", False
 
-    _can_open, f_net_n, pressure_reason = pressure_balance.can_open(
+    # The shared force model clamps negative values to zero. That must not
+    # turn reversed water pressure into a false threshold pass in this test.
+    if h_out_cm < h_in_cm:
+        return (
+            pressure_balance.compute_f_net_n(h_out_cm, h_in_cm),
+            "reverse_pressure_wait",
+            0 if state in ("MID", "HIGH") else "",
+            False,
+        )
+
+    can_open, f_net_n, pressure_reason = pressure_balance.can_open(
         state, h_out_cm, h_in_cm
     )
     if state in ("MID", "HIGH"):
         threshold_passed = int(pressure_reason == "pressure_balanced_open")
     else:
         threshold_passed = ""
-    return f_net_n, pressure_reason, threshold_passed
+    return f_net_n, pressure_reason, threshold_passed, can_open
 
 
 def append_sample(
-    writer, data, state, reason, sensor_valid,
-    f_net_n, pressure_reason, threshold_passed,
+    writer,
+    data,
+    state,
+    reason,
+    sensor_valid,
+    f_net_n,
+    pressure_reason,
+    threshold_passed,
+    threshold_reached_at,
+    actuation,
 ):
-    h_out_cm = data["h_out_cm"]
-    h_in_cm = data["h_in_cm"]
-    writer.writerow({
-        "timestamp": datetime.now().isoformat(timespec="milliseconds"),
-        "state": state,
-        "fsm_reason": reason,
-        "sensor_valid": int(sensor_valid),
-        "outside_raw_distance_cm": data["outside_raw_distance_cm"],
-        "outside_distance_cm": data["outside_distance_cm"],
-        "inside_raw_distance_cm": data["inside_raw_distance_cm"],
-        "inside_distance_cm": data["inside_distance_cm"],
-        "h_out_cm": h_out_cm,
-        "h_in_cm": h_in_cm,
-        "level_difference_cm": data["level_difference_cm"],
-        "rise_rate_out_cm_s": round(data["rise_rate_out_cm_s"], 3),
-        "rise_rate_in_cm_s": round(data["rise_rate_in_cm_s"], 3),
-        "roll_deg": round(data["roll_deg"], 2),
-        "pitch_deg": round(data["pitch_deg"], 2),
-        "outside_valid": int(data["outside_valid"]),
-        "inside_valid": int(data["inside_valid"]),
-        "imu_valid": int(data["imu_valid"]),
-        "sonar_valid": int(data["sonar_valid"]),
-        "severe_tilt": int(data["severe_tilt"]),
-        "f_net_n": round(f_net_n, 3) if f_net_n != "" else "",
-        "pressure_threshold_n": pressure_balance.PRESSURE_THRESHOLD_N,
-        "pressure_threshold_passed": threshold_passed,
-        "pressure_reason": pressure_reason,
-        "actuation": "disabled",
-    })
+    writer.writerow(
+        {
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "state": state,
+            "fsm_reason": reason,
+            "sensor_valid": int(sensor_valid),
+            "outside_raw_distance_cm": data["outside_raw_distance_cm"],
+            "outside_distance_cm": data["outside_distance_cm"],
+            "inside_raw_distance_cm": data["inside_raw_distance_cm"],
+            "inside_distance_cm": data["inside_distance_cm"],
+            "h_out_cm": data["h_out_cm"],
+            "h_in_cm": data["h_in_cm"],
+            "level_difference_cm": data["level_difference_cm"],
+            "rise_rate_out_cm_s": round(data["rise_rate_out_cm_s"], 3),
+            "rise_rate_in_cm_s": round(data["rise_rate_in_cm_s"], 3),
+            "roll_deg": round(data["roll_deg"], 2),
+            "pitch_deg": round(data["pitch_deg"], 2),
+            "outside_valid": int(data["outside_valid"]),
+            "inside_valid": int(data["inside_valid"]),
+            "imu_valid": int(data["imu_valid"]),
+            "sonar_valid": int(data["sonar_valid"]),
+            "severe_tilt": int(data["severe_tilt"]),
+            "f_net_n": round(f_net_n, 3) if f_net_n != "" else "",
+            "pressure_threshold_n": pressure_balance.PRESSURE_THRESHOLD_N,
+            "pressure_threshold_passed": threshold_passed,
+            "threshold_reached_at": threshold_reached_at,
+            "pressure_reason": pressure_reason,
+            "actuation": actuation,
+        }
+    )
 
 
 def csv_needs_header(csv_path):
@@ -145,9 +165,15 @@ def main():
 
     write_header = csv_needs_header(args.csv)
     reader = sensor_input.SensorReader(use_imu=False)
-    initialized = True
+    reader_initialized = False
+    relay_initialized = False
+    threshold_reached_at = ""
     try:
         reader.init()
+        reader_initialized = True
+        relay_controller.init()
+        relay_initialized = True
+
         with open(args.csv, "a", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
             if write_header:
@@ -155,7 +181,11 @@ def main():
                 file.flush()
 
             print(f"센서 기록 시작: {args.csv}")
-            print("출력·릴레이는 연결하거나 작동하지 않습니다. 종료: Ctrl+C")
+            print(
+                "MID/HIGH에서 외부 수위가 내부 수위 이상이고 "
+                f"F_net <= {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N이면 "
+                "릴레이를 1회 구동합니다. 종료: Ctrl+C"
+            )
             while True:
                 loop_start = time.monotonic()
                 data = reader.read_all()
@@ -170,9 +200,21 @@ def main():
                     sonar_valid=data["sonar_valid"],
                     severe_tilt=data["severe_tilt"],
                 )
-                f_net_n, pressure_reason, threshold_passed = pressure_snapshot(
-                    state, data["h_out_cm"], data["h_in_cm"]
+                f_net_n, pressure_reason, threshold_passed, can_open = (
+                    pressure_snapshot(state, data["h_out_cm"], data["h_in_cm"])
                 )
+
+                actuation = "not_triggered"
+                if threshold_passed == 1 and not threshold_reached_at:
+                    threshold_reached_at = datetime.now().isoformat(
+                        timespec="milliseconds"
+                    )
+                if state in ("MID", "HIGH") and can_open:
+                    relay_result = relay_controller.run(can_open)
+                    actuation = relay_result["reason"]
+                elif threshold_reached_at:
+                    actuation = "already_opened_or_gate_closed"
+
                 append_sample(
                     writer,
                     data,
@@ -182,15 +224,18 @@ def main():
                     f_net_n,
                     pressure_reason,
                     threshold_passed,
+                    threshold_reached_at,
+                    actuation,
                 )
                 file.flush()
 
                 print(
                     f"state={state} ({reason}) | h_out={data['h_out_cm']} cm | "
-                    f"h_in={data['h_in_cm']} cm | "
-                    f"F_net={f_net_n} N | pressure={pressure_reason} | "
+                    f"h_in={data['h_in_cm']} cm | F_net={f_net_n} N | "
+                    f"pressure={pressure_reason} | "
                     f"threshold_passed={threshold_passed} | "
-                    f"sensor_valid={sensor_valid} | actuation=disabled"
+                    f"threshold_reached_at={threshold_reached_at or 'N/A'} | "
+                    f"sensor_valid={sensor_valid} | actuation={actuation}"
                 )
 
                 remaining = args.interval - (time.monotonic() - loop_start)
@@ -199,7 +244,9 @@ def main():
     except KeyboardInterrupt:
         print("센서 기록을 종료합니다.")
     finally:
-        if initialized:
+        if relay_initialized:
+            relay_controller.close()
+        if reader_initialized:
             reader.shutdown()
 
 
