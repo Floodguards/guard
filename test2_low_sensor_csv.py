@@ -111,7 +111,7 @@ def main():
         )
 
     write_header = not os.path.exists(args.csv) or os.path.getsize(args.csv) == 0
-    reader = sensor_input.SensorReader()
+    reader = sensor_input.SensorReader(use_imu=False)
     initialized = True
     try:
         reader.init()

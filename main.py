@@ -79,7 +79,7 @@ LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader()
+    sensor_reader = sensor_input.SensorReader(use_imu=False)
     output = output_controller.OutputController(output_controller.OutputConfig())
     try:
         sensor_reader.init()
