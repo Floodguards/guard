@@ -65,6 +65,21 @@ def compute_f_net_n(h_out_cm, h_in_cm):
 
 
 def should_open_window(state, h_out_cm, h_in_cm):
+    if state == "ESCAPE":
+        # 창문이 이미 열린 뒤의 상태. can_open은 릴레이 재작동을 막기 위해 False.
+        f_net_n = (
+            compute_f_net_n(h_out_cm, h_in_cm)
+            if h_out_cm is not None and h_in_cm is not None
+            else None
+        )
+        return False, f_net_n, "escape_already_open"
+
+    if h_out_cm is None:
+        return False, None, "h_out_unavailable_wait"
+
+    if state in ("MID", "HIGH") and h_in_cm is None:
+        return False, None, "h_in_unavailable_wait"
+
     f_net_n = compute_f_net_n(h_out_cm, h_in_cm)
 
     if state == "IDLE":
@@ -73,18 +88,11 @@ def should_open_window(state, h_out_cm, h_in_cm):
     if state == "LOW":
         return True, f_net_n, "low_immediate_open"
 
-    if state == "ESCAPE":
-        # 창문이 이미 열린 뒤의 상태. can_open은 릴레이 재작동을 막기 위해 False.
-        return False, f_net_n, "escape_already_open"
-
     if state not in ("MID", "HIGH"):
         # "알 수 없는 상태: 열지 않음" (정연의 개방판단 문서 기준,
         # 2026-08-25 추가) - IDLE/LOW/MID/HIGH/ESCAPE가 아닌 상태가
         # 실수로 들어와도 안전하게 열지 않는다.
         return False, f_net_n, "unknown_state_no_open"
-
-    if h_in_cm is None:
-        return False, f_net_n, "h_in_unavailable_wait"
 
     if f_net_n <= PRESSURE_THRESHOLD_N:
         return True, f_net_n, "pressure_balanced_open"
