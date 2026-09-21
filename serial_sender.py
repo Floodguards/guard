@@ -9,15 +9,11 @@
 import time
 from dataclasses import dataclass
 
-try:
-    import serial
-except ImportError:  # dry-run tests can run without pyserial installed
-    serial = None
+import serial
 
 PORT = "/dev/ttyUSB0"
 BAUDRATE = 9600
 RESET_WAIT_S = 2.0
-DRY_RUN = True
 
 VALID_STATES = {"IDLE", "LOW", "MID", "HIGH", "ESCAPE"}
 _serial_conn = None
@@ -28,7 +24,6 @@ class SerialConfig:
     port: str = PORT
     baudrate: int = BAUDRATE
     reset_wait_s: float = RESET_WAIT_S
-    dry_run: bool = DRY_RUN
 
 
 class SerialStateSender:
@@ -40,11 +35,6 @@ class SerialStateSender:
         self._last_sent_state = None
 
     def connect(self):
-        if self.config.dry_run:
-            print("[DRY RUN] Serial connection skipped")
-            return
-        if serial is None:
-            raise RuntimeError("pyserial is required for real serial output")
         self._serial_conn = serial.Serial(
             self.config.port, self.config.baudrate, timeout=1
         )
@@ -58,12 +48,9 @@ class SerialStateSender:
             return False
 
         message = f"{state}\n"
-        if self.config.dry_run:
-            print(f"[DRY RUN] send: {message.strip()}")
-        else:
-            if self._serial_conn is None:
-                raise RuntimeError("Serial is not connected. Call connect() first.")
-            self._serial_conn.write(message.encode("ascii"))
+        if self._serial_conn is None:
+            raise RuntimeError("Serial is not connected. Call connect() first.")
+        self._serial_conn.write(message.encode("ascii"))
 
         self._last_sent_state = state
         return True
@@ -74,19 +61,13 @@ class SerialStateSender:
             self._serial_conn = None
 
 
-def init(dry_run=DRY_RUN):
+def init():
     global _serial_conn
-    if dry_run:
-        _serial_conn = None
-        print("[DRY RUN] Serial connection skipped")
-        return
-    if serial is None:
-        raise RuntimeError("pyserial is required for real serial output")
     _serial_conn = serial.Serial(PORT, BAUDRATE, timeout=1)
     time.sleep(RESET_WAIT_S)
 
 
-def send_state(state, dry_run=DRY_RUN):
+def send_state(state):
     global _last_sent_state
 
     state = state.upper()
@@ -99,12 +80,9 @@ def send_state(state, dry_run=DRY_RUN):
 
     message = f"{state}\n"
 
-    if dry_run:
-        print(f"[DRY RUN] send: {message.strip()}")
-    else:
-        if _serial_conn is None:
-            raise RuntimeError("Serial is not connected. Call connect() first.")
-        _serial_conn.write(message.encode("ascii"))
+    if _serial_conn is None:
+        raise RuntimeError("Serial is not connected. Call connect() first.")
+    _serial_conn.write(message.encode("ascii"))
 
     _last_sent_state = state
     return True

@@ -19,9 +19,9 @@ LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader(dry_run=False, use_imu=False)
+    sensor_reader = sensor_input.SensorReader(use_imu=False)
     output = output_controller.OutputController(
-        output_controller.OutputConfig(dry_run=False)
+        output_controller.OutputConfig()
     )
     sensor_ready = False
     output_ready = False
@@ -34,7 +34,7 @@ def main():
         output_ready = True
         output.init()
         relay_ready = True
-        relay_controller.init(dry_run=False)
+        relay_controller.init()
         logger_ready = True
         logger.init()
 
@@ -63,7 +63,7 @@ def main():
                 state, fsm_reason = fsm_controller.escalate_to_escape()
 
             output.update_state(state, data["h_out_cm"], data["h_in_cm"])
-            relay_result = relay_controller.run(can_open, dry_run=False)
+            relay_result = relay_controller.run(can_open)
 
             logger.log(
                 data,

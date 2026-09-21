@@ -20,7 +20,6 @@ STAGE_MESSAGES = {
 
 @dataclass(frozen=True)
 class OutputConfig:
-    dry_run: bool = True
     lcd_i2c_address: int = 0x27
     lcd_cols: int = 16
     lcd_rows: int = 2
@@ -32,18 +31,12 @@ class OutputController:
 
     def __init__(self, config: OutputConfig | None = None):
         self.config = config or OutputConfig()
-        self.sender = serial_sender.SerialStateSender(
-            serial_sender.SerialConfig(dry_run=self.config.dry_run)
-        )
+        self.sender = serial_sender.SerialStateSender(serial_sender.SerialConfig())
         self.lcd = None
         self.last_displayed_state: str | None = None
 
     def init(self) -> None:
         self.sender.connect()
-        if self.config.dry_run:
-            print("[DRY RUN] LCD setup skipped")
-            return
-
         from RPLCD.i2c import CharLCD
 
         self.lcd = CharLCD(
@@ -70,13 +63,12 @@ class OutputController:
             return sent
 
         line1, line2 = STAGE_MESSAGES[state]
-        if self.config.dry_run or self.lcd is None:
-            print(f"[DRY RUN] LCD 1행: {line1} / 2행: {line2}")
-        else:
-            self.lcd.clear()
-            self.lcd.write_string(line1[: self.config.lcd_cols])
-            self.lcd.crlf()
-            self.lcd.write_string(line2[: self.config.lcd_cols])
+        if self.lcd is None:
+            raise RuntimeError("LCD가 초기화되지 않았습니다. init()을 먼저 호출하세요.")
+        self.lcd.clear()
+        self.lcd.write_string(line1[: self.config.lcd_cols])
+        self.lcd.crlf()
+        self.lcd.write_string(line2[: self.config.lcd_cols])
 
         self.last_displayed_state = state
         return sent
