@@ -73,6 +73,23 @@ class OutputController:
         self.last_displayed_state = state
         return sent
 
+    def show_opening(self, state: str) -> bool:
+        """Show the opening-in-progress message before the relay is energized."""
+        if state not in ("LOW", "MID", "HIGH"):
+            raise ValueError(f"개방 중 표시를 지원하지 않는 상태: {state}")
+
+        sent = self.sender.send_state(state)
+        line1 = STAGE_MESSAGES[state][0]
+        if self.lcd is None:
+            raise RuntimeError("LCD가 초기화되지 않았습니다. init()을 먼저 호출하세요.")
+
+        self.lcd.clear()
+        self.lcd.write_string(line1[: self.config.lcd_cols])
+        self.lcd.crlf()
+        self.lcd.write_string("창문 개방 중.."[: self.config.lcd_cols])
+        self.last_displayed_state = "OPENING"
+        return sent
+
     def close(self) -> None:
         self.sender.close()
         if self.lcd is not None:
