@@ -215,7 +215,7 @@ def _convert_signed_16bit(high_byte, low_byte):
 # ============================================================
 
 class SensorReader:
-    def __init__(self, dry_run=True, use_imu=False):
+    def __init__(self, dry_run=True, use_imu=True):
         self.dry_run = dry_run
         self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
@@ -436,6 +436,8 @@ class SensorReader:
         if h_out_cm is not None:
             self.outside_trend_buffer.append((loop_time, h_out_cm))
         if h_in_cm is not None:
+            # 상승률 표본은 FSM 상태(LOW/MID 등)와 무관하게 첫 측정부터 쌓는다.
+            # 다섯 표본이 모이면 calculate_rise_rate()가 기울기를 계산한다.
             self.inside_trend_buffer.append((loop_time, h_in_cm))
 
         rise_rate_out_cm_s = calculate_rise_rate(list(self.outside_trend_buffer))
