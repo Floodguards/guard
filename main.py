@@ -89,6 +89,11 @@ DRY_RUN = os.getenv("FLOODGUARD_DRY_RUN", "1") != "0"
 # 초기화하거나 작동하지 않는다. 기본 동작은 기존 normal 모드다.
 MODE = os.getenv("FLOODGUARD_MODE", "normal").strip().lower()
 EXPERIMENT_MODE = MODE == "experiment"
+# 수압 실험은 기본적으로 IMU 없이 진행할 수 있다. IMU가 준비되면
+# FLOODGUARD_USE_IMU=1로 켤 수 있으며, normal 모드 기본값은 기존대로 사용한다.
+USE_IMU = os.getenv(
+    "FLOODGUARD_USE_IMU", "0" if EXPERIMENT_MODE else "1"
+) != "0"
 LOOP_INTERVAL_S = 0.2
 
 
@@ -100,7 +105,7 @@ def main():
             "experiment 모드는 실제 센서 측정을 위해 FLOODGUARD_DRY_RUN=0이 필요합니다."
         )
 
-    sensor_reader = sensor_input.SensorReader(dry_run=DRY_RUN)
+    sensor_reader = sensor_input.SensorReader(dry_run=DRY_RUN, use_imu=USE_IMU)
     sensor_reader.init()
     output = None
     if not EXPERIMENT_MODE:

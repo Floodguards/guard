@@ -271,8 +271,12 @@ class SensorReader:
                 inside_samples.append(d_in)
             time.sleep(0.05)
 
-        baseline_vector = self.calibrate_initial_orientation()
-        baseline_roll, baseline_pitch = vector_to_roll_pitch_deg(baseline_vector)
+        if self.use_imu:
+            baseline_vector = self.calibrate_initial_orientation()
+            baseline_roll, baseline_pitch = vector_to_roll_pitch_deg(baseline_vector)
+        else:
+            # 수압 실험 등 IMU를 제외한 단계에서는 중립 자세를 기준으로 둔다.
+            baseline_roll = baseline_pitch = 0.0
 
         minimum_samples = max(1, sample_count // 2)
         if len(outside_samples) < minimum_samples:
