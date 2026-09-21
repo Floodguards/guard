@@ -18,7 +18,7 @@
 # 적은 없다 - 유나 본인 문서에 있는 코드를 그대로 옮긴 것이라, 실제
 # 하드웨어에 연결해서 검증이 필요하다.
 #
-# 단일 통합 실행 경로: 실제 센서·IMU를 읽고 FSM/F_net 판단 후
+# 단일 통합 실행 경로: 실제 수위 센서를 읽고 (IMU 제외) FSM/F_net 판단 후
 # Arduino/LCD 출력, 필요 시 릴레이 개방, 통합 CSV 기록을 수행한다.
 # 센서만 기록하는 실험은 별도 test2_low_sensor_csv.py를 사용한다.
 # FSM 상태 판단 (_decide_state) 로직 자체는 2026-08-25부터 유나의
@@ -82,7 +82,7 @@ LOOP_INTERVAL_S = 0.2
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader(dry_run=False, use_imu=True)
+    sensor_reader = sensor_input.SensorReader(dry_run=False, use_imu=False)
     output = output_controller.OutputController(
         output_controller.OutputConfig(dry_run=False)
     )
@@ -92,7 +92,7 @@ def main():
         relay_controller.init(dry_run=False)
         logger.init()
 
-        print("FLOODGUARD 통합 실행 시작 (실센서·IMU·출력·릴레이 사용)")
+        print("FLOODGUARD 통합 실행 시작 (실수위 센서·출력·릴레이 사용, IMU 제외)")
 
         while True:
             loop_start = time.monotonic()

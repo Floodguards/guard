@@ -1,6 +1,6 @@
 """Record live sensor readings and FSM state for experiment 2.
 
-This standalone recorder reads the two water-level sensors and MPU6050,
+This standalone recorder reads the two water-level sensors (IMU disabled),
 then appends readings to a dedicated CSV. It never initializes or calls the
 Arduino/output controller or the relay controller, so LOW cannot actuate
 the window during this test.
@@ -107,11 +107,11 @@ def main():
     if not os.path.isfile(calibration_path):
         raise SystemExit(
             f"캘리브레이션 파일이 없습니다: {calibration_path}\n"
-            "빈 수조에서 센서와 MPU6050 기준 자세를 먼저 보정하세요."
+            "먼저 빈 수조에서 두 수위 센서의 기준값을 보정하세요. IMU 보정은 사용하지 않습니다."
         )
 
     write_header = not os.path.exists(args.csv) or os.path.getsize(args.csv) == 0
-    reader = sensor_input.SensorReader(dry_run=False, use_imu=True)
+    reader = sensor_input.SensorReader(dry_run=False, use_imu=False)
     initialized = True
     try:
         reader.init()

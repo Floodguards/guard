@@ -219,7 +219,7 @@ def _convert_signed_16bit(high_byte, low_byte):
 # ============================================================
 
 class SensorReader:
-    def __init__(self, dry_run=True, use_imu=True):
+    def __init__(self, dry_run=True, use_imu=False):
         self.dry_run = dry_run
         self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
