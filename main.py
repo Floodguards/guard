@@ -111,14 +111,11 @@ def main():
             )
 
             if can_open_flag and state != "ESCAPE":
-                # LCD에 개방 진행을 먼저 알리고, 릴레이 펄스가 끝난 뒤 ESCAPE로 전환한다.
-                output.show_opening(state)
-                relay_result = relay_controller.run(can_open_flag)
                 state, fsm_reason = fsm_controller.escalate_to_escape()
-                output.update_state(state, data["h_out_cm"], data["h_in_cm"])
-            else:
-                output.update_state(state, data["h_out_cm"], data["h_in_cm"])
-                relay_result = relay_controller.run(can_open_flag)
+
+            # 개방 조건 충족 시 ESCAPE를 먼저 표시한 뒤 릴레이를 작동한다.
+            output.update_state(state, data["h_out_cm"], data["h_in_cm"])
+            relay_result = relay_controller.run(can_open_flag)
 
             logger.log(
                 data, state, fsm_reason, sensor_valid,
