@@ -1,8 +1,9 @@
-"""Record sensor readings and actuate once when the MID/HIGH pressure gate passes.
+"""Record sensor readings and actuate once at the MID/HIGH pressure threshold.
 
 This test reads the two water-level sensors with IMU disabled and appends each
-sample to a dedicated CSV. In MID/HIGH, it runs the relay once when the
-pressure threshold passes and the outside level is not below the inside level.
+sample to a dedicated CSV. In MID/HIGH, it runs the relay once only when the
+rounded force equals the pressure threshold and the outside level is not below
+the inside level.
 """
 
 import argparse
@@ -52,7 +53,7 @@ FIELDNAMES = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="센서 기록 및 MID/HIGH 임계값 통과 시 모터 1회 구동 테스트"
+        description="센서 기록 및 MID/HIGH 임계값 일치 시 모터 1회 구동 테스트"
     )
     parser.add_argument(
         "--csv",
@@ -83,13 +84,22 @@ def pressure_snapshot(state, h_out_cm, h_in_cm):
             False,
         )
 
-    can_open, f_net_n, pressure_reason = pressure_balance.can_open(
-        state, h_out_cm, h_in_cm
-    )
     if state in ("MID", "HIGH"):
-        threshold_passed = int(pressure_reason == "pressure_balanced_open")
+        # test2 is a calibration point test: only the threshold value itself
+        # opens the relay. Values below it must not be treated as an opening
+        # condition, unlike the normal main/test1 <= gate.
+        threshold_n = pressure_balance.PRESSURE_THRESHOLD_N
+        threshold_passed = int(round(f_net_n, 1) == round(threshold_n, 1))
+        can_open = bool(threshold_passed)
+        pressure_reason = (
+            "pressure_threshold_exact_match"
+            if can_open
+            else "pressure_threshold_exact_wait"
+        )
     else:
         threshold_passed = ""
+        can_open = False
+        pressure_reason = "test2_non_mid_high_wait"
     return f_net_n, pressure_reason, threshold_passed, can_open
 
 
@@ -183,7 +193,7 @@ def main():
             print(f"센서 기록 시작: {args.csv}")
             print(
                 "MID/HIGH에서 외부 수위가 내부 수위 이상이고 "
-                f"F_net <= {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N이면 "
+                f"F_net = {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N이면 "
                 "릴레이를 1회 구동합니다. 종료: Ctrl+C"
             )
             while True:
