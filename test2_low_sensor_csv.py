@@ -1,7 +1,8 @@
 """Record sensor readings and optionally actuate at the pressure threshold.
 
 This test reads the two water-level sensors with IMU disabled and appends each
-sample to a dedicated CSV. Motor actuation is disabled by default; pass
+sample to a dedicated CSV. It checks the pressure threshold independently of
+the FSM MID/HIGH state. Motor actuation is disabled by default; pass
 ``--actuate-motor`` only for the separate motor run.
 """
 
@@ -75,7 +76,7 @@ def parse_args():
 
 
 def pressure_snapshot(state, h_out_cm, h_in_cm):
-    """Return force, reason, threshold flag, and one-shot open decision."""
+    """Return force and threshold status without requiring MID/HIGH state."""
     if h_out_cm is None or h_in_cm is None:
         return "", "sensor_value_unavailable", "", False
 
@@ -85,28 +86,22 @@ def pressure_snapshot(state, h_out_cm, h_in_cm):
         return (
             pressure_balance.compute_f_net_n(h_out_cm, h_in_cm),
             "reverse_pressure_wait",
-            0 if state in ("MID", "HIGH") else "",
+            0,
             False,
         )
 
     f_net_n = pressure_balance.compute_f_net_n(h_out_cm, h_in_cm)
 
-    if state in ("MID", "HIGH"):
-        # test2 is a calibration point test: only the threshold value itself
-        # opens the relay. Values below it must not be treated as an opening
-        # condition, unlike the normal main/test1 <= gate.
-        threshold_n = pressure_balance.PRESSURE_THRESHOLD_N
-        threshold_passed = int(round(f_net_n, 1) == round(threshold_n, 1))
-        can_open = bool(threshold_passed)
-        pressure_reason = (
-            "pressure_threshold_exact_match"
-            if can_open
-            else "pressure_threshold_exact_wait"
-        )
-    else:
-        threshold_passed = ""
-        can_open = False
-        pressure_reason = "test2_non_mid_high_wait"
+    # This is a threshold measurement test, so do not gate it on the FSM
+    # state. Only an exact rounded threshold match is considered a pass.
+    threshold_n = pressure_balance.PRESSURE_THRESHOLD_N
+    threshold_passed = int(round(f_net_n, 1) == round(threshold_n, 1))
+    can_open = bool(threshold_passed)
+    pressure_reason = (
+        "pressure_threshold_exact_match"
+        if can_open
+        else "pressure_threshold_exact_wait"
+    )
     return f_net_n, pressure_reason, threshold_passed, can_open
 
 
@@ -203,7 +198,7 @@ def main():
 
             print(f"센서 기록 시작: {args.csv}")
             print(
-                "MID/HIGH에서 외부 수위가 내부 수위 이상이고 "
+                "FSM 상태와 관계없이 외부 수위가 내부 수위 이상이고 "
                 f"F_net = {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N인지 기록합니다. "
                 + ("임계값 도달 시 릴레이를 1회 구동합니다. "
                    if args.actuate_motor else "모터는 구동하지 않습니다. ")
@@ -235,7 +230,7 @@ def main():
                     first_threshold_reached_at = threshold_reached_at
 
                 actuation = "not_triggered"
-                if args.actuate_motor and state in ("MID", "HIGH") and can_open:
+                if args.actuate_motor and can_open:
                     relay_result = relay_controller.run(can_open)
                     actuation = relay_result["reason"]
                 elif threshold_reached_at:
