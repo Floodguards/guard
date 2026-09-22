@@ -46,6 +46,7 @@ FIELDNAMES = [
     "pressure_threshold_n",
     "pressure_threshold_passed",
     "threshold_reached_at",
+    "first_threshold_reached_at",
     "pressure_reason",
     "actuation",
 ]
@@ -84,6 +85,8 @@ def pressure_snapshot(state, h_out_cm, h_in_cm):
             False,
         )
 
+    f_net_n = pressure_balance.compute_f_net_n(h_out_cm, h_in_cm)
+
     if state in ("MID", "HIGH"):
         # test2 is a calibration point test: only the threshold value itself
         # opens the relay. Values below it must not be treated as an opening
@@ -113,11 +116,13 @@ def append_sample(
     pressure_reason,
     threshold_passed,
     threshold_reached_at,
+    first_threshold_reached_at,
+    sample_timestamp,
     actuation,
 ):
     writer.writerow(
         {
-            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "timestamp": sample_timestamp,
             "state": state,
             "fsm_reason": reason,
             "sensor_valid": int(sensor_valid),
@@ -141,6 +146,7 @@ def append_sample(
             "pressure_threshold_n": pressure_balance.PRESSURE_THRESHOLD_N,
             "pressure_threshold_passed": threshold_passed,
             "threshold_reached_at": threshold_reached_at,
+            "first_threshold_reached_at": first_threshold_reached_at,
             "pressure_reason": pressure_reason,
             "actuation": actuation,
         }
@@ -177,7 +183,7 @@ def main():
     reader = sensor_input.SensorReader(use_imu=False)
     reader_initialized = False
     relay_initialized = False
-    threshold_reached_at = ""
+    first_threshold_reached_at = ""
     try:
         reader.init()
         reader_initialized = True
@@ -199,6 +205,7 @@ def main():
             while True:
                 loop_start = time.monotonic()
                 data = reader.read_all()
+                sample_timestamp = datetime.now().isoformat(timespec="milliseconds")
                 state, reason, sensor_valid = fsm_controller.update(
                     h_out_cm=data["h_out_cm"],
                     h_in_cm=data["h_in_cm"],
@@ -214,11 +221,13 @@ def main():
                     pressure_snapshot(state, data["h_out_cm"], data["h_in_cm"])
                 )
 
+                threshold_reached_at = (
+                    sample_timestamp if threshold_passed == 1 else ""
+                )
+                if threshold_reached_at and not first_threshold_reached_at:
+                    first_threshold_reached_at = threshold_reached_at
+
                 actuation = "not_triggered"
-                if threshold_passed == 1 and not threshold_reached_at:
-                    threshold_reached_at = datetime.now().isoformat(
-                        timespec="milliseconds"
-                    )
                 if state in ("MID", "HIGH") and can_open:
                     relay_result = relay_controller.run(can_open)
                     actuation = relay_result["reason"]
@@ -235,6 +244,8 @@ def main():
                     pressure_reason,
                     threshold_passed,
                     threshold_reached_at,
+                    first_threshold_reached_at,
+                    sample_timestamp,
                     actuation,
                 )
                 file.flush()
@@ -245,6 +256,7 @@ def main():
                     f"pressure={pressure_reason} | "
                     f"threshold_passed={threshold_passed} | "
                     f"threshold_reached_at={threshold_reached_at or 'N/A'} | "
+                    f"first_threshold_reached_at={first_threshold_reached_at or 'N/A'} | "
                     f"sensor_valid={sensor_valid} | actuation={actuation}"
                 )
 
