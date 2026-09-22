@@ -1,9 +1,8 @@
-"""Record sensor readings and actuate once at the MID/HIGH pressure threshold.
+"""Record sensor readings and optionally actuate at the pressure threshold.
 
 This test reads the two water-level sensors with IMU disabled and appends each
-sample to a dedicated CSV. In MID/HIGH, it runs the relay once only when the
-rounded force equals the pressure threshold and the outside level is not below
-the inside level.
+sample to a dedicated CSV. Motor actuation is disabled by default; pass
+``--actuate-motor`` only for the separate motor run.
 """
 
 import argparse
@@ -54,7 +53,7 @@ FIELDNAMES = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="센서 기록 및 MID/HIGH 임계값 일치 시 모터 1회 구동 테스트"
+        description="센서·수압 기록 테스트 (기본: 모터 미구동)"
     )
     parser.add_argument(
         "--csv",
@@ -66,6 +65,11 @@ def parse_args():
         type=float,
         default=LOOP_INTERVAL_S,
         help="센서 기록 간격(초, 기본값: 0.2)",
+    )
+    parser.add_argument(
+        "--actuate-motor",
+        action="store_true",
+        help="임계값 도달 시 릴레이를 1회 구동합니다. 기본값은 모터 미구동입니다.",
     )
     return parser.parse_args()
 
@@ -187,8 +191,9 @@ def main():
     try:
         reader.init()
         reader_initialized = True
-        relay_controller.init()
-        relay_initialized = True
+        if args.actuate_motor:
+            relay_controller.init()
+            relay_initialized = True
 
         with open(args.csv, "a", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
@@ -199,8 +204,10 @@ def main():
             print(f"센서 기록 시작: {args.csv}")
             print(
                 "MID/HIGH에서 외부 수위가 내부 수위 이상이고 "
-                f"F_net = {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N이면 "
-                "릴레이를 1회 구동합니다. 종료: Ctrl+C"
+                f"F_net = {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N인지 기록합니다. "
+                + ("임계값 도달 시 릴레이를 1회 구동합니다. "
+                   if args.actuate_motor else "모터는 구동하지 않습니다. ")
+                + "종료: Ctrl+C"
             )
             while True:
                 loop_start = time.monotonic()
@@ -228,11 +235,15 @@ def main():
                     first_threshold_reached_at = threshold_reached_at
 
                 actuation = "not_triggered"
-                if state in ("MID", "HIGH") and can_open:
+                if args.actuate_motor and state in ("MID", "HIGH") and can_open:
                     relay_result = relay_controller.run(can_open)
                     actuation = relay_result["reason"]
                 elif threshold_reached_at:
-                    actuation = "already_opened_or_gate_closed"
+                    actuation = (
+                        "motor_disabled"
+                        if not args.actuate_motor
+                        else "already_opened_or_gate_closed"
+                    )
 
                 append_sample(
                     writer,
