@@ -60,14 +60,11 @@ def main():
             )
 
             if can_open and state != "ESCAPE":
-                # 개방 진행 문구를 먼저 표시하고, 릴레이 구동 뒤 ESCAPE로 전환한다.
-                output.show_opening(state)
-                relay_result = relay_controller.run(can_open)
                 state, fsm_reason = fsm_controller.escalate_to_escape()
-                output.update_state(state, data["h_out_cm"], data["h_in_cm"])
-            else:
-                output.update_state(state, data["h_out_cm"], data["h_in_cm"])
-                relay_result = relay_controller.run(can_open)
+
+            # 개방 조건 충족 시 ESCAPE를 먼저 표시한 뒤 릴레이를 작동한다.
+            output.update_state(state, data["h_out_cm"], data["h_in_cm"])
+            relay_result = relay_controller.run(can_open)
 
             logger.log(
                 data,
