@@ -13,7 +13,7 @@ from datetime import datetime
 import relay_controller
 
 
-CSV_FILE_NAME = "floodguard_motor_opening_trials.csv"
+CSV_FILE_NAME = "floodguard_test0_motor_log.csv"
 
 
 def parse_args():
