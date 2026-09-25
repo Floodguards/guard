@@ -20,7 +20,7 @@
 #
 # 단일 통합 실행 경로: 실제 수위 센서를 읽고 FSM/F_net 판단 후
 # Arduino/LCD 출력, 필요 시 릴레이 개방, 통합 CSV 기록을 수행한다.
-# 센서만 기록하는 실험은 별도 test2_low_sensor_csv.py를 사용한다.
+# 센서만 기록하는 실험은 별도 test2_threshold_measurement.py를 사용한다.
 # FSM 상태 판단 (_decide_state) 로직 자체는 2026-08-25부터 유나의
 # 8.25 설계로 교체됐다 (fsm_controller.py 상단 주석 참고).
 #
@@ -37,8 +37,8 @@
 #
 # --- rollover_detected 로직 삭제 결정 (2026-08-25, 서연) ---
 # 이전 "8.16" 버전부터 있던 침수감지 디지털 센서(GPIO27, DO 출력)
-# 기반 rollover_detected(전복 판정: 물 감지 + 60도 이상 기울기가
-# 1초 유지)는 서연이 원본 문서 페이지에 "이 센서가 필요할까요??"라고
+# 기반 rollover_detected(전복 판정)는 서연이 원본 문서 페이지에
+# "이 센서가 필요할까요??"라고
 # 남긴 코멘트가 있었고, 실제 code_A.zip의 config.py에도 이 센서 값이
 # 없는 걸 확인해서 - 이 센서/로직을 완전히 삭제하기로 함. 전복(기울기)
 # 현재 IMU를 사용하지 않으므로 기울기 기반 전복 판정은 비활성화되어 있다.
@@ -48,9 +48,8 @@
 # MID/HIGH F_net 조건부 개방이든 상관없이 "지금 열린다"고 판단된 순간,
 # 통합 실행 경로에서만 호출한다)
 # fsm_controller.escalate_to_escape()를 호출해서 FSM 자체를 ESCAPE로
-# 승격시킨다. 전복(기울기, severe_tilt)은 이번 수조 실험(물 유입
-# 시나리오)의 핵심이 아니라고 판단해 ESCAPE 트리거에서는 제외했다 -
-# 현재 IMU를 사용하지 않으므로 이 경로에서는 severe_tilt가 발생하지 않는다.
+# 승격시킨다. IMU의 roll/pitch와 severe_tilt는 수위 데이터 신뢰도
+# 확인 및 로그용으로만 사용하며, FSM을 HIGH/ESCAPE로 직접 승격시키지 않는다.
 #
 # 2026-08-25 추가: ESCAPE는 처음엔 main.py가 output_state 변수로만
 # 따로 관리했는데("서연의 요구사항 정리" 페이지 참고), 서연이 "그냥
@@ -76,10 +75,13 @@ import relay_controller
 import logger
 
 LOOP_INTERVAL_S = 0.2
+# IMU는 현재 비활성화한다. 하드웨어 확인 후 True로 바꾸면
+# roll/pitch 측정·저역통과 필터·기울기 기반 초음파 신뢰도 판정·로그만 활성화된다.
+USE_IMU = False
 
 
 def main():
-    sensor_reader = sensor_input.SensorReader(use_imu=False)
+    sensor_reader = sensor_input.SensorReader(use_imu=USE_IMU)
     output = output_controller.OutputController(output_controller.OutputConfig())
     try:
         sensor_reader.init()
@@ -87,7 +89,10 @@ def main():
         relay_controller.init()
         logger.init()
 
-        print("FLOODGUARD 통합 실행 시작 (실수위 센서·출력·릴레이 사용, IMU 미사용)")
+        print(
+            "FLOODGUARD 통합 실행 시작 "
+            f"(실수위 센서·출력·릴레이 사용, IMU {'사용' if USE_IMU else '미사용'})"
+        )
 
         while True:
             loop_start = time.monotonic()

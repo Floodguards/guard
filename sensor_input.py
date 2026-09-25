@@ -35,27 +35,19 @@
 # 새 버전은 가속도 벡터에서 roll/pitch를 각각 계산한다. 서연 확인
 # (2026-08-25): "유나가 롤/피치 분리했으니 이걸로 따라간다"고 결정함.
 #
-# !! 임계값 관련 !!
-# 유나의 8.25 페이지 원문: "위 각도는 실험 전 초기 설정값이며, 차량
-# 모형을 실제로 기울여 센서 오차를 확인한 후 수정한다" / "1cm, 6cm,
-# 14cm, 0.3cm/s, 20도, 60도는 검증된 실제 차량 안전기준이 아니라
-# 30cm 높이 모형의 초기 실험값이다." 즉 아래 SONAR_VALID_TILT_DEG,
-# SEVERE_TILT_DEG와 fsm_controller.py의 FsmThresholds는 전부 잠정치.
-# window_width_m/pressure_threshold_n과 같은 성격이라 fsm_controller.py
-# 쪽에 통합 TODO 표로 정리해뒀다 (README_불일치보고서.md 10번 참고).
+# !! 수위 임계값 관련 !!
+# LOW·MID·HIGH 수위 기준은 수조 실험 CSV를 바탕으로 결정한다.
 #
 # !! 변경 3 (2026-08-25 다섯 번째 갱신): 침수감지 디지털 센서/rollover
 # 로직 완전 삭제 !!
 # 이전 "8.16" 버전부터 있던 침수감지 디지털 센서(GPIO27, DO 출력)
-# 기반 rollover_detected(물 감지 + 60도 이상 기울기 1초 유지 → 전복
-# 판정) 로직을 삭제했다. 서연이 원본 문서 페이지에 "이 센서가
+# 기반 rollover_detected(전복 판정) 로직을 삭제했다. 서연이 원본
+# 문서 페이지에 "이 센서가
 # 필요할까요??"라고 남긴 코멘트가 있었고, 실제 code_A.zip의
 # config.py에도 이 센서 관련 값이 전혀 없는 걸 확인해서 - 유나가
 # 이미 뺀 것으로 보고 병합 코드에서도 완전히 삭제하기로 함. 전복
-# (기울기) 위험 판정은 유나의 8.25 FSM 설계에 있는 severe_tilt만
-# 쓴다 (물 감지 센서 없이, 60도 이상이면 즉시 반응 - 1초 유지 확인
-# 없음). fsm_controller.py의 _decide_state()가 이 severe_tilt를
-# 그대로 쓰고 있어서 별도 수정 없음 (main.py 상단 주석 참고).
+# IMU의 roll/pitch와 severe_tilt는 보정·품질 확인·로그용으로만 남긴다.
+# 수위 FSM은 IMU 기울기나 severe_tilt만으로 상태를 바꾸지 않는다.
 #
 # !! 변경 4 (2026-08-25 여섯 번째 갱신): 8.25 문서와 대조해서 빠져
 # 있던 SensorData 필드 2개 추가 !!
@@ -120,10 +112,8 @@ DISTANCE_FILTER_SIZE = 5
 TREND_WINDOW_SIZE = 15
 RISING_SPEED_THRESHOLD_CM_S = 0.3  # TODO(잠정치): 유나 8.25 문서 기준, 수조 실험 후 조정
 
-# ----- IMU 필터/판정 (TODO 잠정치: fsm_controller.py의 통합 표 참고) -----
+# ----- IMU 필터 (보정·로그용) -----
 ACCEL_LPF_ALPHA = 0.15
-SONAR_VALID_TILT_DEG = 20.0   # TODO(잠정치): 유나 8.25 문서 "20도" 초기 실험값
-SEVERE_TILT_DEG = 60.0        # TODO(잠정치): 유나 8.25 문서 "60도" 초기 실험값
 
 # ----- A02YYUW (외부 수위, UART) -----
 # 배선(유나 8.25 문서 4.2): VCC->Pi 3.3V(물리핀17), GND->물리핀20,
@@ -152,7 +142,10 @@ MPU6050_ADDRESS = 0x68
 MPU6050_ACCEL_REGISTER = 0x3B
 
 # ----- 캘리브레이션 파일 (유나 8.25 문서 7.2) -----
-CALIBRATION_FILE = "calibration/sensor_calibration.json"
+# 실행한 현재 디렉터리가 달라도 floodguard_b 안의 동일한 파일을
+# 모든 테스트와 main.py가 함께 사용한다.
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+CALIBRATION_FILE = os.path.join(PROJECT_DIR, "calibration", "sensor_calibration.json")
 DEFAULT_CALIBRATION = {
     "outside_base_distance_cm": 30.0,   # TODO: 실측 후 교체 (init()에서 캘리브레이션 시 갱신)
     "inside_base_distance_cm": 30.0,    # TODO: 실측 후 교체
@@ -442,21 +435,12 @@ class SensorReader:
 
         outside_valid = outside_raw_cm is not None
         inside_valid = inside_raw_cm is not None
-        sonar_valid = (
-            outside_valid
-            and inside_valid
-            and (not self.use_imu or imu_valid)
-            and abs(roll_deg) <= SONAR_VALID_TILT_DEG
-            and abs(pitch_deg) <= SONAR_VALID_TILT_DEG
-        )
-        severe_tilt = (
-            self.use_imu
-            and imu_valid
-            and (
-                abs(roll_deg) >= SEVERE_TILT_DEG
-                or abs(pitch_deg) >= SEVERE_TILT_DEG
-            )
-        )
+        # 초음파 센서의 측정 성공 여부만 수위 FSM의 센서 유효성으로 사용한다.
+        # IMU 상태와 기울기는 선택적 보정·로그용이며 수위 판정을 막지 않는다.
+        sonar_valid = outside_valid and inside_valid
+        # 기울기 임계값 판정은 사용하지 않는다. 기존 CSV 열과 호출부
+        # 호환성을 위해 severe_tilt는 항상 False로 기록한다.
+        severe_tilt = False
 
         # 2026-08-25 여섯 번째 갱신: 문서 14절 SensorData와 대조해서 추가
         # (위 헤더 "변경 4" 참고).
