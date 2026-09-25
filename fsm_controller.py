@@ -60,10 +60,12 @@
 # ┌─────────────────────────┬────────┬──────────────────────────┐
 # │ 값                       │ 임시값 │ 의미                      │
 # ├─────────────────────────┼────────┼──────────────────────────┤
-# │ low_level_cm             │ 미정   │ IDLE→LOW 전환 h_out 기준   │
+# │ low_level_out_cm         │ 미정   │ IDLE→LOW 전환 h_out 기준   │
+# │ low_level_in_cm          │ 미정   │ IDLE→LOW 전환 h_in 기준    │
 # │ mid_level_out_cm         │ 미정   │ MID 전환 h_out 기준        │
 # │ mid_level_in_cm          │ 미정   │ MID 전환 h_in 기준         │
-# │ high_level_cm            │ 미정   │ HIGH 전환 h_out/h_in 기준  │
+# │ high_level_out_cm        │ 미정   │ HIGH 전환 h_out 기준       │
+# │ high_level_in_cm         │ 미정   │ HIGH 전환 h_in 기준        │
 # └─────────────────────────┴────────┴──────────────────────────┘
 # ============================================================
 
@@ -96,10 +98,12 @@ class SensorData:
 @dataclass
 class FsmThresholds:
     # 수조 실험으로 결정하기 전에는 모든 단계 기준을 비워 둔다.
-    low_level_cm: Optional[float] = None
+    low_level_out_cm: Optional[float] = None
+    low_level_in_cm: Optional[float] = None
     mid_level_out_cm: Optional[float] = None
     mid_level_in_cm: Optional[float] = None
-    high_level_cm: Optional[float] = None
+    high_level_out_cm: Optional[float] = None
+    high_level_in_cm: Optional[float] = None
 
 
 @dataclass
@@ -140,8 +144,8 @@ class FloodguardFsm:
 
         # 4) 바깥/안쪽 수위 중 하나라도 HIGH 기준 이상이면 HIGH
         if (
-            t.high_level_cm is not None
-            and (data.h_out_cm >= t.high_level_cm or data.h_in_cm >= t.high_level_cm)
+            (t.high_level_out_cm is not None and data.h_out_cm >= t.high_level_out_cm)
+            or (t.high_level_in_cm is not None and data.h_in_cm >= t.high_level_in_cm)
         ):
             return FloodState.HIGH, "h_out_or_h_in_reached_high_level"
 
@@ -152,7 +156,10 @@ class FloodguardFsm:
         ):
             return FloodState.MID, "mid_condition_met"
 
-        if t.low_level_cm is not None and data.h_out_cm >= t.low_level_cm:
+        if (
+            (t.low_level_out_cm is not None and data.h_out_cm >= t.low_level_out_cm)
+            or (t.low_level_in_cm is not None and data.h_in_cm >= t.low_level_in_cm)
+        ):
             return FloodState.LOW, "h_out_reached_low_level"
 
         # 아무것도 해당 안되면 idle
