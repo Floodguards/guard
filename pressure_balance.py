@@ -48,12 +48,16 @@ PRESSURE_THRESHOLD_N = 26.1  # 조건부 개방 임계값(N)
 
 
 def compute_f_net_n(h_out_cm, h_in_cm):
-    """평균 폭 근사로 계산한 순수압력(N); 수위 단위는 cm."""
+    """평균 폭 근사로 계산한 순수압력(N); 수위 단위는 cm.
+
+    외부 수위가 내부 수위보다 낮은 역수압 조건은 실험 판정값으로
+    취급하지 않고 None을 반환한다.
+    """
     h_out_m = (h_out_cm or 0.0) / 100.0
     h_in_m = (h_in_cm or 0.0) / 100.0
     diff = 0.5 * RHO_WATER * G * WINDOW_WIDTH_M * (h_out_m ** 2 - h_in_m ** 2)
     if diff < 0:
-        diff = 0.0
+        return None
     return diff
 
 
@@ -74,6 +78,8 @@ def should_open_window(state, h_out_cm, h_in_cm):
         return False, None, "h_in_unavailable_wait"
 
     f_net_n = compute_f_net_n(h_out_cm, h_in_cm)
+    if f_net_n is None:
+        return False, None, "reverse_pressure_wait"
 
     if state == "IDLE":
         return False, f_net_n, "idle_no_open"

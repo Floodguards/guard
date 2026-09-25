@@ -91,8 +91,7 @@ def pressure_snapshot(state, h_out_cm, h_in_cm):
     if h_out_cm is None or h_in_cm is None:
         return "", "sensor_value_unavailable", "", False
 
-    # The shared force model clamps negative values to zero. That must not
-    # turn reversed water pressure into a false threshold pass in this test.
+    # Reverse pressure is not a valid threshold-measurement condition.
     if h_out_cm < h_in_cm:
         return (
             pressure_balance.compute_f_net_n(h_out_cm, h_in_cm),
