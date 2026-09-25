@@ -60,15 +60,16 @@
 # ┌─────────────────────────┬────────┬──────────────────────────┐
 # │ 값                       │ 임시값 │ 의미                      │
 # ├─────────────────────────┼────────┼──────────────────────────┤
-# │ low_level_cm             │ 1cm    │ IDLE→LOW 전환 h_out 기준   │
-# │ mid_level_out_cm         │ 6cm    │ MID 전환 h_out 기준        │
-# │ mid_level_in_cm          │ 1cm    │ MID 전환 h_in 기준         │
+# │ low_level_cm             │ 미정   │ IDLE→LOW 전환 h_out 기준   │
+# │ mid_level_out_cm         │ 미정   │ MID 전환 h_out 기준        │
+# │ mid_level_in_cm          │ 미정   │ MID 전환 h_in 기준         │
 # │ high_level_cm            │ 미정   │ HIGH 전환 h_out/h_in 기준  │
 # └─────────────────────────┴────────┴──────────────────────────┘
 # ============================================================
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 
 class FloodState(Enum):
@@ -94,11 +95,11 @@ class SensorData:
 
 @dataclass
 class FsmThresholds:
-    # !! TODO(잠정치 - 수조 실험 CSV로 보정 예정, 위 표 참고) !!
-    low_level_cm: float = 1.0
-    mid_level_out_cm: float = 6.0
-    mid_level_in_cm: float = 1.0
-    high_level_cm: float = 14.0
+    # 수조 실험으로 결정하기 전에는 모든 단계 기준을 비워 둔다.
+    low_level_cm: Optional[float] = None
+    mid_level_out_cm: Optional[float] = None
+    mid_level_in_cm: Optional[float] = None
+    high_level_cm: Optional[float] = None
 
 
 @dataclass
@@ -138,17 +139,20 @@ class FloodguardFsm:
             return self.state, "sonar_invalid_hold_previous_state"
 
         # 4) 바깥/안쪽 수위 중 하나라도 HIGH 기준 이상이면 HIGH
-        if data.h_out_cm >= t.high_level_cm or data.h_in_cm >= t.high_level_cm:
+        if (
+            t.high_level_cm is not None
+            and (data.h_out_cm >= t.high_level_cm or data.h_in_cm >= t.high_level_cm)
+        ):
             return FloodState.HIGH, "h_out_or_h_in_reached_high_level"
 
         # 5) 바깥/안쪽 수위 중 하나라도 MID 기준이면 MID
         if (
-            data.h_out_cm >= t.mid_level_out_cm
-            or data.h_in_cm >= t.mid_level_in_cm
+            (t.mid_level_out_cm is not None and data.h_out_cm >= t.mid_level_out_cm)
+            or (t.mid_level_in_cm is not None and data.h_in_cm >= t.mid_level_in_cm)
         ):
             return FloodState.MID, "mid_condition_met"
 
-        if data.h_out_cm >= t.low_level_cm:
+        if t.low_level_cm is not None and data.h_out_cm >= t.low_level_cm:
             return FloodState.LOW, "h_out_reached_low_level"
 
         # 아무것도 해당 안되면 idle

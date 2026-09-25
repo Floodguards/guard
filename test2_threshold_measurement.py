@@ -104,14 +104,14 @@ def pressure_snapshot(state, h_out_cm, h_in_cm):
     f_net_n = pressure_balance.compute_f_net_n(h_out_cm, h_in_cm)
 
     # This is a threshold measurement test, so do not gate it on the FSM
-    # state. Only an exact rounded threshold match is considered a pass.
+    # state. Any net pressure at or below the threshold is a pass.
     threshold_n = pressure_balance.PRESSURE_THRESHOLD_N
-    threshold_passed = int(round(f_net_n, 1) == round(threshold_n, 1))
+    threshold_passed = int(f_net_n <= threshold_n)
     can_open = bool(threshold_passed)
     pressure_reason = (
-        "pressure_threshold_exact_match"
+        "pressure_threshold_reached"
         if can_open
-        else "pressure_threshold_exact_wait"
+        else "pressure_threshold_wait"
     )
     return f_net_n, pressure_reason, threshold_passed, can_open
 
