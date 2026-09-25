@@ -43,18 +43,16 @@
 #      내부용으로 새로 추가) 의미 있는 입력이 됨.
 #   2) roll/pitch를 각각 따로 확인한다 (이전엔 tilt_deg 하나만 계산해서
 #      두 값에 똑같이 넣는 임시방편이었다).
-#   3) "센서 무효" 처리가 두 단계로 나뉜다: imu_valid=False면 이전
-#      상태 유지, sonar_valid=False(기울기 20도 초과)면 이전 상태
-#      유지 - 이전 버전은 한 가지 기준(8도)으로만 판단했다.
-#   4) severe_tilt(60도 이상) + h_out>=1cm이면 다른 조건보다 먼저
-#      HIGH로 즉시 승격한다 (전복 위험 우선 처리).
+#   3) 초음파 센서 측정이 유효하지 않으면 이전 상태를 유지한다.
+#      IMU 유효성은 수위 FSM을 멈추는 조건으로 사용하지 않고 로그용으로만 둔다.
+#   4) IMU의 roll/pitch는 초음파 데이터 신뢰도와 로그에만 사용한다.
+#      severe_tilt는 기록용 값이며 FSM 상태를 HIGH로 승격시키지 않는다.
 # !! 주의 !! 이 로직은 정연(B)의 실제 코드가 아니라 유나(A)의 설계
 # 문서에 있는 코드다 - 디버거로 검증된 적은 없다. 정연이 자기
 # fsm_controller.py에도 이 로직을 반영했는지 확인 필요.
 #
-# 아래 임계값들은 전부 잠정치다. 유나 8.25 문서 원문: "1cm, 6cm, 14cm,
-# 0.3cm/s, 20도, 60도는 검증된 실제 차량 안전기준이 아니라 30cm 높이
-# 모형의 초기 실험값이다. 수조 실험에서 측정된 CSV를 기반으로 수정한다."
+# 아래 수위 임계값들은 전부 잠정치다. 수조 실험에서 측정된 CSV를
+# 기반으로 LOW·MID·HIGH 기준을 결정한다.
 # window_width_m/pressure_threshold_n(pressure_balance.py)과 같은
 # 성격의 TODO라서 아래 표로 한 번에 정리해뒀다 (README 10번도 참고):
 #
@@ -65,9 +63,7 @@
 # │ low_level_cm             │ 1cm    │ IDLE→LOW 전환 h_out 기준   │
 # │ mid_level_out_cm         │ 6cm    │ MID 전환 h_out 기준        │
 # │ mid_level_in_cm          │ 1cm    │ MID 전환 h_in 기준         │
-# │ high_level_cm            │ 14cm   │ HIGH 전환 h_out/h_in 기준  │
-# │ sonar_valid_tilt_deg     │ 20도   │ 초음파 신뢰 가능 기울기 한계│
-# │ severe_tilt_deg          │ 60도   │ 전복 위험 판정 기울기       │
+# │ high_level_cm            │ 미정   │ HIGH 전환 h_out/h_in 기준  │
 # └─────────────────────────┴────────┴──────────────────────────┘
 # ============================================================
 
@@ -103,8 +99,6 @@ class FsmThresholds:
     mid_level_out_cm: float = 6.0
     mid_level_in_cm: float = 1.0
     high_level_cm: float = 14.0
-    sonar_valid_tilt_deg: float = 20.0
-    severe_tilt_deg: float = 60.0
 
 
 @dataclass
@@ -131,29 +125,15 @@ class FloodguardFsm:
         """2026-08-25 교체: 유나(A) "8.25" 문서 12절 decide_state() 로직을
         옮긴 것. 조건 자체(임계값)는 문서 pseudocode 그대로다.
 
-        2026-08-25 다섯 번째 갱신: 검사 순서는 실제 code_A.zip의
-        fsm.py 순서로 맞췄다 (severe_tilt 먼저, 그다음 imu_valid,
-        그다음 sonar_valid) - 원래는 문서 pseudocode 순서(imu_valid를
-        가장 먼저 봄)를 따랐는데, sensor_input.py에서 severe_tilt를
-        `imu_valid and (...)`로 계산하기 때문에(즉 imu_valid=False면
-        severe_tilt는 항상 False) 어느 순서로 봐도 최종 판정 결과는
-        동일하다. 결과가 같으므로 실제 코드 순서를 따르기로 함."""
+        IMU의 roll/pitch와 severe_tilt는 보정·로그용으로만 전달되며,
+        수위 FSM 전환은 초음파 센서 유효성과 h_out/h_in 기준만 사용한다."""
         t = self.thresholds
 
         if data.h_out_cm is None:
             return self.state, "h_out_unavailable_hold_previous_state"
 
-        # 1) 전복 위험(severe_tilt)이면 다른 조건보다 먼저 HIGH로 즉시 승격
-        #    (severe_tilt는 imu_valid=True일 때만 True가 될 수 있으므로
-        #    이 체크가 imu_valid 체크보다 앞에 와도 결과는 같다)
-        if data.severe_tilt and data.h_out_cm >= t.low_level_cm:
-            return FloodState.HIGH, "severe_tilt_emergency_high"
-
-        # 2) IMU 자체가 무효면 이전 상태 유지
-        if not data.imu_valid:
-            return self.state, "imu_invalid_hold_previous_state"
-
-        # 3) 초음파 신뢰 불가(기울기 20도 초과)면 이전 상태 유지
+        # 초음파 센서 측정이 유효하지 않으면 이전 상태를 유지한다.
+        # IMU 오류·기울기는 수위 FSM의 전환 조건으로 사용하지 않는다.
         if not data.sonar_valid:
             return self.state, "sonar_invalid_hold_previous_state"
 
@@ -232,9 +212,7 @@ def update(
         severe_tilt=severe_tilt,
     )
     decision = _fsm.update(data)
-    sensor_valid = decision.reason not in (
-        "imu_invalid_hold_previous_state", "sonar_invalid_hold_previous_state",
-    )
+    sensor_valid = decision.reason != "sonar_invalid_hold_previous_state"
     return decision.state.value, decision.reason, sensor_valid
 
 

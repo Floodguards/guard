@@ -1,7 +1,8 @@
-"""Record sensor readings and optionally actuate at the pressure threshold.
+"""Test 2: measure the pressure threshold and optionally actuate the motor.
 
-This test reads the two water-level sensors with IMU disabled and appends each
-sample to a dedicated CSV. It checks the pressure threshold independently of
+This test reads the two water-level sensors and records the threshold
+measurement in a dedicated CSV. IMU is optional and is used only for
+calibration/logging. It checks the pressure threshold independently of
 the FSM MID/HIGH state. Motor actuation is disabled by default; pass
 ``--actuate-motor`` only for the separate motor run.
 """
@@ -54,7 +55,7 @@ FIELDNAMES = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="센서·수압 기록 테스트 (기본: 모터 미구동)"
+        description="Test 2 임계값 측정 실험 (기본: 모터 미구동)"
     )
     parser.add_argument(
         "--csv",
@@ -71,6 +72,16 @@ def parse_args():
         "--actuate-motor",
         action="store_true",
         help="임계값 도달 시 릴레이를 1회 구동합니다. 기본값은 모터 미구동입니다.",
+    )
+    parser.add_argument(
+        "--use-imu",
+        action="store_true",
+        help="IMU를 활성화해 roll/pitch 품질값과 로그를 기록합니다. 기본값은 비활성화입니다.",
+    )
+    parser.add_argument(
+        "--calibrate-empty-tank",
+        action="store_true",
+        help="빈 수조에서 외부·내부 센서 기준값을 측정해 공용 캘리브레이션 파일에 저장합니다.",
     )
     return parser.parse_args()
 
@@ -172,20 +183,24 @@ def main():
         raise SystemExit("--interval은 0보다 커야 합니다.")
 
     calibration_path = sensor_input.CALIBRATION_FILE
-    if not os.path.isfile(calibration_path):
+    if not os.path.isfile(calibration_path) and not args.calibrate_empty_tank:
         raise SystemExit(
             f"캘리브레이션 파일이 없습니다: {calibration_path}\n"
             "먼저 빈 수조에서 두 수위 센서의 기준값을 보정하세요. IMU 보정은 사용하지 않습니다."
         )
 
     write_header = csv_needs_header(args.csv)
-    reader = sensor_input.SensorReader(use_imu=False)
+    reader = sensor_input.SensorReader(use_imu=args.use_imu)
     reader_initialized = False
     relay_initialized = False
     first_threshold_reached_at = ""
     try:
         reader.init()
         reader_initialized = True
+        if args.calibrate_empty_tank:
+            calibration = reader.calibrate_empty_tank()
+            print(f"공용 캘리브레이션 저장 완료: {sensor_input.CALIBRATION_FILE}")
+            print(calibration)
         if args.actuate_motor:
             relay_controller.init()
             relay_initialized = True

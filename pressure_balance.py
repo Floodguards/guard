@@ -5,14 +5,10 @@
 # 2026-09-21 trapezoid remeasurement update로 대체됐다.
 #
 # 기존 F_net ≤ 57.7N은 μ=0.83 가정에 따른 계산 추정치였다.
-# 2026-09-21 재측정: 패널 아래폭 33.3cm, 위폭 36.4cm,
-# 높이 21.7cm, 두께 3mm다. 요청한 단순 근사로 평균 폭을 사용한다:
-# (33.3+36.4)/2 = 34.85cm. 사다리꼴 폭 변화 적분은 사용하지 않는다.
-# 판 밀도 0.55g/cm³, 드럼 유효 반지름 0.50cm, μ_s=0.60은 설계 가정이다.
-# 평균 폭 기준 부피 약 226.87cm³, 추정 질량 약 0.1248kg,
-# 정격토크 1.8kgf·cm를 0.50cm 반지름에 적용한 이상 구동력은 약 35.3N이다.
-# (35.3 - 0.1248×9.8)/0.60 ≈ 56.8N으로 재계산해 임시 임계값에 적용했다.
-# μ_k=0.30으로 구한 약 163.9N은 운동 시작 뒤 참고값일 뿐 개방 기준이 아니다.
+# 2026-09-25 문서 확정 입력값: 수압 작용 폭 0.19m, 드럼 유효 반지름
+# 0.80cm, 포맥스판과 철사를 합친 질량 0.120kg, 정지마찰계수 μ_s=0.80.
+# 정격토크 1.8kgf·cm를 0.80cm 반지름에 적용한 이상 구동력은 약 22.05N이고,
+# (22.05 - 0.120×9.8)/0.80 ≈ 26.1N을 조건부 개방 임계값으로 사용한다.
 #
 # 2026-08-25 historical model (superseded 2026-09-21): rectangular width
 # 0.37m and PRESSURE_THRESHOLD_N=108.2N. Current dimensions/model are the
@@ -33,25 +29,22 @@
 RHO_WATER = 1000.0
 G = 9.8
 
-# 판 치수 실측값. 수압 계산은 요청에 따라 평균 폭 근사를 쓴다.
+# 판 치수 실측값. 수압 작용 폭은 문서 확정값 19cm로 고정한다.
 PANEL_HEIGHT_M = 0.217
 PANEL_BOTTOM_WIDTH_M = 0.333
 PANEL_TOP_WIDTH_M = 0.364
-WINDOW_WIDTH_M = (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
+WINDOW_WIDTH_M = 0.190  # 문서 확정 수압 작용 폭 19cm
 PANEL_THICKNESS_M = 0.003
 PANEL_DENSITY_KG_M3 = 550.0  # 0.55g/cm³ 가정, 실측 전
 PANEL_AREA_M2 = PANEL_HEIGHT_M * (PANEL_BOTTOM_WIDTH_M + PANEL_TOP_WIDTH_M) / 2.0
 PANEL_VOLUME_M3 = PANEL_AREA_M2 * PANEL_THICKNESS_M
-PANEL_MASS_KG = PANEL_VOLUME_M3 * PANEL_DENSITY_KG_M3
+PANEL_MASS_KG = 0.120  # 포맥스판과 고정철사를 합친 실측 질량
 
-# 설계 추정 입력값: μ_s=0.60, μ_k=0.30. 실제 접촉 조합·젖은 조건의 실측값은 아니다.
-# 토크 1.8kgf·cm / 드럼 유효 반지름 0.50cm, 효율 100% 가정의 이상값.
-MAX_LINEAR_DRIVE_FORCE_N = 35.3
-STATIC_FRICTION_COEFF = 0.60   # 사용자 지정 설계 추정값; 실제 조합 실측 전
-KINETIC_FRICTION_COEFF = 0.30  # PVC 접촉 실험값을 참고한 설계 추정값
-PRESSURE_THRESHOLD_N = (
-    56.8
-)  # 사용자 지정 임시 임계값(N); 구조 및 실험 검증 필요
+# 문서 확정 입력값: μ_s=0.80, 드럼 유효 반지름 0.80cm.
+MAX_LINEAR_DRIVE_FORCE_N = 22.05
+STATIC_FRICTION_COEFF = 0.80
+KINETIC_FRICTION_COEFF = None  # 문서에서 운동마찰계수는 정의하지 않음
+PRESSURE_THRESHOLD_N = 26.1  # 조건부 개방 임계값(N)
 
 
 def compute_f_net_n(h_out_cm, h_in_cm):
