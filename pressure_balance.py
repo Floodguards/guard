@@ -84,17 +84,16 @@ def should_open_window(state, h_out_cm, h_in_cm):
     if state == "IDLE":
         return False, f_net_n, "idle_no_open"
 
-    if state == "LOW":
-        return True, f_net_n, "low_immediate_open"
-
-    if state not in ("MID", "HIGH"):
+    if state not in ("LOW", "MID", "HIGH"):
         # "알 수 없는 상태: 열지 않음" (정연의 개방판단 문서 기준,
         # 2026-08-25 추가) - IDLE/LOW/MID/HIGH/ESCAPE가 아닌 상태가
         # 실수로 들어와도 안전하게 열지 않는다.
         return False, f_net_n, "unknown_state_no_open"
 
     if f_net_n <= PRESSURE_THRESHOLD_N:
-        return True, f_net_n, "pressure_balanced_open"
+        return True, f_net_n, (
+            "low_pressure_balanced_open" if state == "LOW" else "pressure_balanced_open"
+        )
 
     return False, f_net_n, "pressure_too_high_wait"
 
