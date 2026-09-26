@@ -22,12 +22,13 @@ import sensor_input
 
 DEFAULT_CSV = "floodguard_test2_threshold_motor_log.csv"
 LOOP_INTERVAL_S = 0.2
-# 하강 수위 모터 실험: h_out가 15cm를 초과하면 실험을 활성화하고,
-# 이후 하강하며 15cm, 14cm, 13cm, ...를 처음 통과할 때마다 모터 펄스를 준다.
+# 하강 수위 모터 실험: h_out가 17cm를 초과하면 실험을 활성화하고,
+# 이후 하강하며 17cm, 16cm, 15cm, ...를 처음 통과할 때마다 모터 펄스를 준다.
 # 기본 실행에서는 --actuate-motor 옵션이 없으므로 센서 기록만 수행한다.
-DESCENDING_MOTOR_ARM_H_OUT_CM = 15.0
-DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM = 15.0
+DESCENDING_MOTOR_ARM_H_OUT_CM = 17.0
+DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM = 17.0
 DESCENDING_MOTOR_STOP_H_OUT_CM = 0.0
+DESCENDING_MOTOR_PULSE_S = 4.0
 
 FIELDNAMES = [
     "timestamp",
@@ -81,7 +82,7 @@ def parse_args():
         help=(
             f"h_out가 {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm를 초과한 뒤 "
             f"하강하며 {DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, "
-            "14.0cm, 13.0cm, ...를 통과할 때마다 릴레이를 1회 구동합니다. "
+            "16.0cm, 15.0cm, ...를 통과할 때마다 릴레이를 4초간 1회 구동합니다. "
             "기본값은 모터 미구동입니다."
         ),
     )
@@ -104,7 +105,9 @@ def parse_args():
 def pressure_snapshot(state, h_out_cm, h_in_cm):
     """Return force and threshold status without requiring MID/HIGH state."""
     if h_out_cm is None or h_in_cm is None:
-        return "", "sensor_value_unavailable", "", False
+        # CSV에는 append_sample()이 빈 칸으로 저장한다. 문자열을 반환하면
+        # append_sample()의 round()에서 TypeError가 발생한다.
+        return None, "sensor_value_unavailable", "", False
 
     # Reverse pressure is not a valid threshold-measurement condition.
     if h_out_cm < h_in_cm:
@@ -239,8 +242,8 @@ def main():
                 "FSM 상태와 관계없이 외부 수위, 내부 수위, F_net을 기록합니다. "
                 + (
                     f"h_out > {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm 후 하강하며 "
-                    f"{DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, 14.0cm, 13.0cm, ...에서 "
-                    "릴레이를 반복 구동합니다. "
+                    f"{DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, 16.0cm, 15.0cm, ...에서 "
+                    f"릴레이를 매회 {DESCENDING_MOTOR_PULSE_S:.1f}초씩 반복 구동합니다. "
                     if args.actuate_motor
                     else "모터는 구동하지 않습니다. "
                 )
@@ -300,7 +303,7 @@ def main():
                     # 반복 하강 실험이므로 _already_opened 잠금을 쓰지 않는
                     # trial pulse를 호출한다. 판이 열리면 사용자가 Ctrl+C로 종료한다.
                     relay_result = relay_controller.run_trial_pulse(
-                        relay_controller.MAX_RUN_S
+                        DESCENDING_MOTOR_PULSE_S
                     )
                     actuation = (
                         f"descending_h_out_{target_h_out_cm:.1f}cm_"
