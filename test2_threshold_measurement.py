@@ -22,10 +22,12 @@ import sensor_input
 
 DEFAULT_CSV = "floodguard_test2_threshold_motor_log.csv"
 LOOP_INTERVAL_S = 0.2
-# Test2 모터 실험은 수압 계산 결과가 아니라 이 외부 수위에 도달했을 때
-# 한 번만 구동한다. 기본 실행에서는 --actuate-motor 옵션이 없으므로 안전하게
-# 센서 기록만 수행한다.
-MOTOR_TRIGGER_H_OUT_CM = 16.0
+# 하강 수위 모터 실험: h_out가 17cm를 초과하면 실험을 활성화하고,
+# 이후 하강하며 17cm, 16cm, 15cm, ...를 처음 통과할 때마다 모터 펄스를 준다.
+# 기본 실행에서는 --actuate-motor 옵션이 없으므로 센서 기록만 수행한다.
+DESCENDING_MOTOR_ARM_H_OUT_CM = 17.0
+DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM = 17.0
+DESCENDING_MOTOR_STOP_H_OUT_CM = 0.0
 
 FIELDNAMES = [
     "timestamp",
@@ -77,8 +79,10 @@ def parse_args():
         "--actuate-motor",
         action="store_true",
         help=(
-            f"h_out가 {MOTOR_TRIGGER_H_OUT_CM:.1f}cm 이상일 때 릴레이를 "
-            "1회 구동합니다. 기본값은 모터 미구동입니다."
+            f"h_out가 {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm를 초과한 뒤 "
+            f"하강하며 {DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, "
+            "16.0cm, 15.0cm, ...를 통과할 때마다 릴레이를 1회 구동합니다. "
+            "기본값은 모터 미구동입니다."
         ),
     )
     parser.add_argument(
@@ -207,6 +211,9 @@ def main():
     reader_initialized = False
     relay_initialized = False
     first_threshold_reached_at = ""
+    descending_motor_armed = False
+    next_motor_trigger_h_out_cm = DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM
+    motor_attempt_count = 0
     try:
         reader.init()
         reader_initialized = True
@@ -231,7 +238,9 @@ def main():
             print(
                 "FSM 상태와 관계없이 외부 수위, 내부 수위, F_net을 기록합니다. "
                 + (
-                    f"h_out >= {MOTOR_TRIGGER_H_OUT_CM:.1f}cm에서 릴레이를 1회 구동합니다. "
+                    f"h_out > {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm 후 하강하며 "
+                    f"{DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, 16.0cm, 15.0cm, ...에서 "
+                    "릴레이를 반복 구동합니다. "
                     if args.actuate_motor
                     else "모터는 구동하지 않습니다. "
                 )
@@ -262,20 +271,45 @@ def main():
                 if threshold_reached_at and not first_threshold_reached_at:
                     first_threshold_reached_at = threshold_reached_at
 
-                motor_trigger_ready = (
-                    data["h_out_cm"] is not None
-                    and data["h_out_cm"] >= MOTOR_TRIGGER_H_OUT_CM
-                )
                 actuation = "not_triggered"
-                if args.actuate_motor and motor_trigger_ready:
-                    # Test2의 모터 실험은 h_out 기준을 명시적으로 검증한다.
-                    # pressure_snapshot 결과는 계속 CSV에 기록하지만, 이 실험의
-                    # 릴레이 트리거 조건에는 사용하지 않는다.
-                    relay_result = relay_controller.run(True)
-                    actuation = relay_result["reason"]
+                h_out_cm = data["h_out_cm"]
+                if (
+                    h_out_cm is not None
+                    and h_out_cm > DESCENDING_MOTOR_ARM_H_OUT_CM
+                ):
+                    descending_motor_armed = True
+
+                if args.actuate_motor and not descending_motor_armed:
+                    actuation = (
+                        f"waiting_for_h_out_{DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm_to_arm"
+                    )
+                elif (
+                    args.actuate_motor
+                    and next_motor_trigger_h_out_cm < DESCENDING_MOTOR_STOP_H_OUT_CM
+                ):
+                    actuation = "descending_motor_sequence_complete"
+                elif args.actuate_motor and not data["outside_valid"]:
+                    actuation = "waiting_for_valid_h_out"
+                elif (
+                    args.actuate_motor
+                    and h_out_cm is not None
+                    and h_out_cm <= next_motor_trigger_h_out_cm
+                ):
+                    target_h_out_cm = next_motor_trigger_h_out_cm
+                    motor_attempt_count += 1
+                    # 반복 하강 실험이므로 _already_opened 잠금을 쓰지 않는
+                    # trial pulse를 호출한다. 판이 열리면 사용자가 Ctrl+C로 종료한다.
+                    relay_result = relay_controller.run_trial_pulse(
+                        relay_controller.MAX_RUN_S
+                    )
+                    actuation = (
+                        f"descending_h_out_{target_h_out_cm:.1f}cm_"
+                        f"attempt_{motor_attempt_count}_{relay_result['reason']}"
+                    )
+                    next_motor_trigger_h_out_cm -= 1.0
                 elif args.actuate_motor:
                     actuation = (
-                        f"waiting_for_h_out_{MOTOR_TRIGGER_H_OUT_CM:.1f}cm"
+                        f"waiting_for_descending_h_out_{next_motor_trigger_h_out_cm:.1f}cm"
                     )
                 elif threshold_reached_at:
                     actuation = (
