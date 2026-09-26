@@ -13,20 +13,17 @@
 # 위치에 고정한다" 원문을 다시 확인한 결과, 올바른 배정은 다음과
 # 같다:
 #   외부 수위 → A02YYUW (방수형, UART, /dev/serial0)
-#   내부 수위 → HC-SR04P (비방수, GPIO TRIG=23/ECHO=24)
-# (방수 센서를 물에 노출되는 외부에, 비방수 센서를 보호 덮개를 씌운
-# 내부에 두는 게 맞다 - 처음엔 이걸 거꾸로 적었었다.)
+#   내부 수위 → HC-SR04P (GPIO TRIG=23/ECHO=24)
+# 두 센서는 모두 물에 직접 닿지 않도록 수면 위에 보호 덮개와 함께
+# 설치한다.
 #
 # !! 변경 1: 외부/내부 센서가 서로 다른 물리 센서로 분리됨 !!
 # 이전 버전: A02YYUW(방수 초음파, UART) 하나만 있었고 "외부"만
 # 측정했다. 내부(h_in_cm)는 estimate_h_in_cm()이 항상 None을
 # 반환하는 미구현 상태였다 - 이게 병합 코드 전체에서 계속 "가장
 # 급한 문제"로 표시되어 있던 항목이다.
-# 새 버전: 외부는 A02YYUW(방수, UART, /dev/serial0)로, 내부는
-# HC-SR04P(비방수, GPIO TRIG/ECHO)로 분리했다. A02YYUW는 이전
-# 버전과 마찬가지로 계속 "외부용"이고, 새로 추가된 HC-SR04P가
-# "내부용"을 맡는다 - h_in_cm이 이제 실제로 측정된다. 이 부분은
-# A의 담당 영역이고 B/C 코드와 충돌이 없어서 확인 즉시 반영했다.
+# 외부는 A02YYUW(방수, UART, /dev/serial0), 내부는 HC-SR04P(GPIO
+# TRIG/ECHO)로 분리한다.
 #
 # !! 변경 2: roll/pitch를 분리해서 계산함 !!
 # 이전 버전은 tilt_deg 하나만 계산해서 roll_deg/pitch_deg 둘 다에
@@ -116,10 +113,8 @@ RISING_SPEED_THRESHOLD_CM_S = 0.3  # TODO(잠정치): 유나 8.25 문서 기준,
 ACCEL_LPF_ALPHA = 0.15
 
 # ----- A02YYUW (외부 수위, UART) -----
-# 배선(유나 8.25 문서 4.2): VCC->Pi 3.3V(물리핀17), GND->물리핀20,
-# TX->GPIO15/RXD(물리핀10), RX 연결 안 함. 방수형이라 물에 잠기는
-# 외부 수면을 측정하는 데 쓰고, 커넥터/Pi 본체는 외부 수면보다
-# 높은 위치에 고정한다 (8.25 문서 3절).
+# VCC->Pi 3.3V(물리핀17), GND->물리핀20,
+# TX->GPIO15/RXD(물리핀10), RX->GPIO14/TXD(물리핀8).
 OUTSIDE_SERIAL_PORT = "/dev/serial0"
 OUTSIDE_SERIAL_BAUDRATE = 9600
 
@@ -215,6 +210,7 @@ class SensorReader:
     def __init__(self, use_imu=False):
         self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
+        self._outside_uart_buffer = bytearray()
         self.inside_sensor = None   # gpiozero.DistanceSensor (HC-SR04P, 내부), init()에서 생성
         self.i2c_bus = None
 
@@ -288,26 +284,45 @@ class SensorReader:
     # ----- A02YYUW (외부 수위) -----
 
     def read_a02yyuw_distance_cm(self):
+        """Drain queued UART frames and return only the newest valid distance."""
         if self.outside_serial is None:
             return None
+
         deadline = time.monotonic() + 0.5
+        latest_distance_cm = None
+
         while time.monotonic() < deadline:
-            first_byte = self.outside_serial.read(1)
-            if not first_byte:
-                continue
-            if first_byte[0] != 0xFF:
-                continue
-            remaining = self.outside_serial.read(3)
-            if len(remaining) != 3:
-                continue
-            data_high, data_low, received_checksum = remaining[0], remaining[1], remaining[2]
-            calculated_checksum = (0xFF + data_high + data_low) & 0xFF
-            if received_checksum != calculated_checksum:
-                continue
-            distance_mm = (data_high << 8) + data_low
-            if 30 <= distance_mm <= 4500:
-                return distance_mm / 10.0
-        return None
+            waiting = self.outside_serial.in_waiting
+            chunk = self.outside_serial.read(waiting if waiting else 1)
+            if not chunk:
+                break
+
+            self._outside_uart_buffer.extend(chunk)
+
+            while True:
+                header_index = self._outside_uart_buffer.find(b"\xff")
+                if header_index < 0:
+                    self._outside_uart_buffer.clear()
+                    break
+                if header_index > 0:
+                    del self._outside_uart_buffer[:header_index]
+                if len(self._outside_uart_buffer) < 4:
+                    break
+
+                frame = self._outside_uart_buffer[:4]
+                calculated_checksum = (frame[0] + frame[1] + frame[2]) & 0xFF
+                if frame[3] == calculated_checksum:
+                    distance_mm = (frame[1] << 8) + frame[2]
+                    if 30 <= distance_mm <= 4500:
+                        latest_distance_cm = distance_mm / 10.0
+                    del self._outside_uart_buffer[:4]
+                else:
+                    del self._outside_uart_buffer[0]
+
+            if latest_distance_cm is not None and self.outside_serial.in_waiting == 0:
+                return latest_distance_cm
+
+        return latest_distance_cm
 
     # ----- HC-SR04P (내부 수위) -----
 
@@ -373,6 +388,7 @@ class SensorReader:
             baudrate=OUTSIDE_SERIAL_BAUDRATE,
             timeout=0.3,
         )
+        self.outside_serial.reset_input_buffer()
         self.inside_sensor = DistanceSensor(
             echo=HC_SR04P_ECHO_GPIO,
             trigger=HC_SR04P_TRIGGER_GPIO,
