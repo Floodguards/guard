@@ -151,7 +151,9 @@ def append_sample(
             "imu_valid": int(data["imu_valid"]),
             "sonar_valid": int(data["sonar_valid"]),
             "severe_tilt": int(data["severe_tilt"]),
-            "f_net_n": round(f_net_n, 3) if f_net_n != "" else "",
+            # h_in이 h_out보다 높으면 F_net은 역방향 수압으로 None이다.
+            # 이 경우에도 기록을 계속하기 위해 빈 칸으로 저장한다.
+            "f_net_n": round(f_net_n, 3) if f_net_n is not None else "",
             "pressure_threshold_n": pressure_balance.PRESSURE_THRESHOLD_N,
             "pressure_threshold_passed": threshold_passed,
             "threshold_reached_at": threshold_reached_at,
