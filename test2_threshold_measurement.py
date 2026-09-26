@@ -23,11 +23,10 @@ import sensor_input
 DEFAULT_CSV = "floodguard_test2_threshold_motor_log.csv"
 LOOP_INTERVAL_S = 0.2
 # 하강 수위 모터 실험: h_out가 16cm를 초과하면 실험을 활성화하고,
-# 이후 하강하며 16cm, 15cm, 14cm, ...를 처음 통과할 때마다 모터 펄스를 준다.
+# 이후 하강하며 16cm 이하를 처음 통과할 때만 모터 펄스를 한 번 준다.
 # 기본 실행에서는 --actuate-motor 옵션이 없으므로 센서 기록만 수행한다.
 DESCENDING_MOTOR_ARM_H_OUT_CM = 16.0
 DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM = 16.0
-DESCENDING_MOTOR_STOP_H_OUT_CM = 0.0
 DESCENDING_MOTOR_PULSE_S = 2.0
 
 FIELDNAMES = [
@@ -81,8 +80,8 @@ def parse_args():
         action="store_true",
         help=(
             f"h_out가 {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm를 초과한 뒤 "
-            f"하강하며 {DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, "
-            "15.0cm, 14.0cm, ...를 통과할 때마다 릴레이를 2초간 1회 구동합니다. "
+            f"하강하며 {DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm 이하를 "
+            "처음 통과할 때 릴레이를 2초간 한 번만 구동합니다. "
             "기본값은 모터 미구동입니다."
         ),
     )
@@ -242,8 +241,8 @@ def main():
                 "FSM 상태와 관계없이 외부 수위, 내부 수위, F_net을 기록합니다. "
                 + (
                     f"h_out > {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm 후 하강하며 "
-                    f"{DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, 15.0cm, 14.0cm, ...에서 "
-                    f"릴레이를 매회 {DESCENDING_MOTOR_PULSE_S:.1f}초씩 반복 구동합니다. "
+                    f"{DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm 이하를 처음 통과할 때 "
+                    f"릴레이를 {DESCENDING_MOTOR_PULSE_S:.1f}초간 한 번만 구동합니다. "
                     if args.actuate_motor
                     else "모터는 구동하지 않습니다. "
                 )
@@ -288,7 +287,7 @@ def main():
                     )
                 elif (
                     args.actuate_motor
-                    and next_motor_trigger_h_out_cm < DESCENDING_MOTOR_STOP_H_OUT_CM
+                    and next_motor_trigger_h_out_cm is None
                 ):
                     actuation = "descending_motor_sequence_complete"
                 elif args.actuate_motor and not data["outside_valid"]:
@@ -296,12 +295,13 @@ def main():
                 elif (
                     args.actuate_motor
                     and h_out_cm is not None
+                    and next_motor_trigger_h_out_cm is not None
                     and h_out_cm <= next_motor_trigger_h_out_cm
                 ):
                     target_h_out_cm = next_motor_trigger_h_out_cm
                     motor_attempt_count += 1
-                    # 반복 하강 실험이므로 _already_opened 잠금을 쓰지 않는
-                    # trial pulse를 호출한다. 판이 열리면 사용자가 Ctrl+C로 종료한다.
+                    # 한 번의 하강 실험이므로 _already_opened 잠금을 쓰지 않는
+                    # supervised trial pulse를 호출한다.
                     relay_result = relay_controller.run_trial_pulse(
                         DESCENDING_MOTOR_PULSE_S
                     )
@@ -309,7 +309,7 @@ def main():
                         f"descending_h_out_{target_h_out_cm:.1f}cm_"
                         f"attempt_{motor_attempt_count}_{relay_result['reason']}"
                     )
-                    next_motor_trigger_h_out_cm -= 1.0
+                    next_motor_trigger_h_out_cm = None
                 elif args.actuate_motor:
                     actuation = (
                         f"waiting_for_descending_h_out_{next_motor_trigger_h_out_cm:.1f}cm"
