@@ -4,7 +4,8 @@ This test reads the two water-level sensors and records the threshold
 measurement in a dedicated CSV. IMU is optional and is used only for
 calibration/logging. It checks the pressure threshold independently of
 the FSM MID/HIGH state. Motor actuation is disabled by default; pass
-``--actuate-motor`` only for the separate motor run.
+``--actuate-motor`` only for the separate motor run. Empty-tank
+calibration is a separate command and exits immediately after saving.
 """
 
 import argparse
@@ -81,7 +82,10 @@ def parse_args():
     parser.add_argument(
         "--calibrate-empty-tank",
         action="store_true",
-        help="빈 수조에서 외부·내부 센서 기준값을 측정해 공용 캘리브레이션 파일에 저장합니다.",
+        help=(
+            "빈 수조에서 외부·내부 센서 기준값을 측정해 공용 "
+            "캘리브레이션 파일에 저장한 뒤 종료합니다."
+        ),
     )
     return parser.parse_args()
 
@@ -182,6 +186,8 @@ def main():
     args = parse_args()
     if args.interval <= 0:
         raise SystemExit("--interval은 0보다 커야 합니다.")
+    if args.calibrate_empty_tank and args.actuate_motor:
+        raise SystemExit("캘리브레이션 실행에는 --actuate-motor를 함께 사용할 수 없습니다.")
 
     calibration_path = sensor_input.CALIBRATION_FILE
     if not os.path.isfile(calibration_path) and not args.calibrate_empty_tank:
@@ -190,7 +196,6 @@ def main():
             "먼저 빈 수조에서 두 수위 센서의 기준값을 보정하세요. IMU 보정은 사용하지 않습니다."
         )
 
-    write_header = csv_needs_header(args.csv)
     reader = sensor_input.SensorReader(use_imu=args.use_imu)
     reader_initialized = False
     relay_initialized = False
@@ -202,6 +207,9 @@ def main():
             calibration = reader.calibrate_empty_tank()
             print(f"공용 캘리브레이션 저장 완료: {sensor_input.CALIBRATION_FILE}")
             print(calibration)
+            return
+
+        write_header = csv_needs_header(args.csv)
         if args.actuate_motor:
             relay_controller.init()
             relay_initialized = True
