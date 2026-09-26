@@ -22,6 +22,10 @@ import sensor_input
 
 DEFAULT_CSV = "floodguard_test2_threshold_motor_log.csv"
 LOOP_INTERVAL_S = 0.2
+# Test2 모터 실험은 수압 계산 결과가 아니라 이 외부 수위에 도달했을 때
+# 한 번만 구동한다. 기본 실행에서는 --actuate-motor 옵션이 없으므로 안전하게
+# 센서 기록만 수행한다.
+MOTOR_TRIGGER_H_OUT_CM = 16.0
 
 FIELDNAMES = [
     "timestamp",
@@ -72,7 +76,10 @@ def parse_args():
     parser.add_argument(
         "--actuate-motor",
         action="store_true",
-        help="임계값 도달 시 릴레이를 1회 구동합니다. 기본값은 모터 미구동입니다.",
+        help=(
+            f"h_out가 {MOTOR_TRIGGER_H_OUT_CM:.1f}cm 이상일 때 릴레이를 "
+            "1회 구동합니다. 기본값은 모터 미구동입니다."
+        ),
     )
     parser.add_argument(
         "--use-imu",
@@ -222,10 +229,12 @@ def main():
 
             print(f"센서 기록 시작: {args.csv}")
             print(
-                "FSM 상태와 관계없이 외부 수위가 내부 수위 이상이고 "
-                f"F_net = {pressure_balance.PRESSURE_THRESHOLD_N:.1f}N인지 기록합니다. "
-                + ("임계값 도달 시 릴레이를 1회 구동합니다. "
-                   if args.actuate_motor else "모터는 구동하지 않습니다. ")
+                "FSM 상태와 관계없이 외부 수위, 내부 수위, F_net을 기록합니다. "
+                + (
+                    f"h_out >= {MOTOR_TRIGGER_H_OUT_CM:.1f}cm에서 릴레이를 1회 구동합니다. "
+                    if args.actuate_motor
+                    else "모터는 구동하지 않습니다. "
+                )
                 + "종료: Ctrl+C"
             )
             while True:
@@ -253,15 +262,24 @@ def main():
                 if threshold_reached_at and not first_threshold_reached_at:
                     first_threshold_reached_at = threshold_reached_at
 
+                motor_trigger_ready = (
+                    data["h_out_cm"] is not None
+                    and data["h_out_cm"] >= MOTOR_TRIGGER_H_OUT_CM
+                )
                 actuation = "not_triggered"
-                if args.actuate_motor and can_open:
-                    relay_result = relay_controller.run(can_open)
+                if args.actuate_motor and motor_trigger_ready:
+                    # Test2의 모터 실험은 h_out 기준을 명시적으로 검증한다.
+                    # pressure_snapshot 결과는 계속 CSV에 기록하지만, 이 실험의
+                    # 릴레이 트리거 조건에는 사용하지 않는다.
+                    relay_result = relay_controller.run(True)
                     actuation = relay_result["reason"]
+                elif args.actuate_motor:
+                    actuation = (
+                        f"waiting_for_h_out_{MOTOR_TRIGGER_H_OUT_CM:.1f}cm"
+                    )
                 elif threshold_reached_at:
                     actuation = (
                         "motor_disabled"
-                        if not args.actuate_motor
-                        else "already_opened_or_gate_closed"
                     )
 
                 append_sample(

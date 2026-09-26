@@ -10,7 +10,7 @@ GPIO_PIN = 17
 ACTIVE_HIGH = True
 # 건식 개방 실측(약 4~5초)을 반영한 임시 통전 상한.
 # 종단/위치 피드백이 추가되면 실제 완전 개방 시 즉시 OFF해야 한다.
-MAX_RUN_S = 5.5
+MAX_RUN_S = 5.0
 
 _already_opened = False
 _relay = None
