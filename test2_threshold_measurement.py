@@ -275,6 +275,10 @@ def main():
                 print(
                     f"state={state} ({reason}) | h_out={data['h_out_cm']} cm | "
                     f"h_in={data['h_in_cm']} cm | F_net={f_net_n} N | "
+                    f"d_out_raw={data['outside_raw_distance_cm']} cm | "
+                    f"d_out_filtered={data['outside_distance_cm']} cm | "
+                    f"d_in_raw={data['inside_raw_distance_cm']} cm | "
+                    f"d_in_filtered={data['inside_distance_cm']} cm | "
                     f"pressure={pressure_reason} | "
                     f"threshold_passed={threshold_passed} | "
                     f"threshold_reached_at={threshold_reached_at or 'N/A'} | "
