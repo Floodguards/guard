@@ -215,6 +215,7 @@ class SensorReader:
     def __init__(self, use_imu=False):
         self.use_imu = use_imu
         self.outside_serial = None  # serial.Serial (A02YYUW, 외부), init()에서 생성
+        self._outside_uart_buffer = bytearray()
         self.inside_sensor = None   # gpiozero.DistanceSensor (HC-SR04P, 내부), init()에서 생성
         self.i2c_bus = None
 
@@ -288,26 +289,45 @@ class SensorReader:
     # ----- A02YYUW (외부 수위) -----
 
     def read_a02yyuw_distance_cm(self):
+        """Drain queued UART frames and return only the newest valid distance."""
         if self.outside_serial is None:
             return None
+
         deadline = time.monotonic() + 0.5
+        latest_distance_cm = None
+
         while time.monotonic() < deadline:
-            first_byte = self.outside_serial.read(1)
-            if not first_byte:
-                continue
-            if first_byte[0] != 0xFF:
-                continue
-            remaining = self.outside_serial.read(3)
-            if len(remaining) != 3:
-                continue
-            data_high, data_low, received_checksum = remaining[0], remaining[1], remaining[2]
-            calculated_checksum = (0xFF + data_high + data_low) & 0xFF
-            if received_checksum != calculated_checksum:
-                continue
-            distance_mm = (data_high << 8) + data_low
-            if 30 <= distance_mm <= 4500:
-                return distance_mm / 10.0
-        return None
+            waiting = self.outside_serial.in_waiting
+            chunk = self.outside_serial.read(waiting if waiting else 1)
+            if not chunk:
+                break
+
+            self._outside_uart_buffer.extend(chunk)
+
+            while True:
+                header_index = self._outside_uart_buffer.find(b"\xff")
+                if header_index < 0:
+                    self._outside_uart_buffer.clear()
+                    break
+                if header_index > 0:
+                    del self._outside_uart_buffer[:header_index]
+                if len(self._outside_uart_buffer) < 4:
+                    break
+
+                frame = self._outside_uart_buffer[:4]
+                calculated_checksum = (frame[0] + frame[1] + frame[2]) & 0xFF
+                if frame[3] == calculated_checksum:
+                    distance_mm = (frame[1] << 8) + frame[2]
+                    if 30 <= distance_mm <= 4500:
+                        latest_distance_cm = distance_mm / 10.0
+                    del self._outside_uart_buffer[:4]
+                else:
+                    del self._outside_uart_buffer[0]
+
+            if latest_distance_cm is not None and self.outside_serial.in_waiting == 0:
+                return latest_distance_cm
+
+        return latest_distance_cm
 
     # ----- HC-SR04P (내부 수위) -----
 
@@ -373,6 +393,7 @@ class SensorReader:
             baudrate=OUTSIDE_SERIAL_BAUDRATE,
             timeout=0.3,
         )
+        self.outside_serial.reset_input_buffer()
         self.inside_sensor = DistanceSensor(
             echo=HC_SR04P_ECHO_GPIO,
             trigger=HC_SR04P_TRIGGER_GPIO,
