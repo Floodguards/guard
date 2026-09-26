@@ -28,7 +28,7 @@ LOOP_INTERVAL_S = 0.2
 DESCENDING_MOTOR_ARM_H_OUT_CM = 16.0
 DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM = 16.0
 DESCENDING_MOTOR_STOP_H_OUT_CM = 0.0
-DESCENDING_MOTOR_PULSE_S = 4.0
+DESCENDING_MOTOR_PULSE_S = 2.0
 
 FIELDNAMES = [
     "timestamp",
@@ -82,7 +82,7 @@ def parse_args():
         help=(
             f"h_out가 {DESCENDING_MOTOR_ARM_H_OUT_CM:.1f}cm를 초과한 뒤 "
             f"하강하며 {DESCENDING_MOTOR_FIRST_TRIGGER_H_OUT_CM:.1f}cm, "
-            "15.0cm, 14.0cm, ...를 통과할 때마다 릴레이를 4초간 1회 구동합니다. "
+            "15.0cm, 14.0cm, ...를 통과할 때마다 릴레이를 2초간 1회 구동합니다. "
             "기본값은 모터 미구동입니다."
         ),
     )
