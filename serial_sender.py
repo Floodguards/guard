@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import serial
 
 PORT = "/dev/ttyUSB0"
-BAUDRATE = 9600
+BAUDRATE = 115200
 RESET_WAIT_S = 2.0
 
 VALID_STATES = {"IDLE", "LOW", "MID", "HIGH", "ESCAPE"}

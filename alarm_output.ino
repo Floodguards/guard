@@ -9,8 +9,16 @@
  * HIGH
  * ESCAPE
  *
- * Serial baud rate: 9600
+ * Serial baud rate: 115200
+ *
+ * Opening-delay measurement extension:
+ * MPU6050 is mounted on the foam board and continuously emits only detected
+ * motion events as MOTION,<sequence>,<arduino_micros>,<delta_g>.
+ * The Pi test scripts decide whether an event belongs to a relay pulse by
+ * accepting only events received after the Pi has turned the relay on.
  */
+
+#include <Wire.h>
 
 // =====================================================
 // 핀 설정
@@ -28,6 +36,24 @@ const int MOTOR_PIN = 10;
 
 // 공통 캐소드 = false
 const bool LED_COMMON_ANODE = false;
+
+// =====================================================
+// Foam-board MPU6050: Uno SDA=A4, SCL=A5
+// =====================================================
+
+const byte MPU6050_ADDRESS = 0x68;
+const byte MPU6050_ACCEL_REGISTER = 0x3B;
+const float MOTION_DELTA_G = 0.06f;
+const byte MOTION_CONFIRM_SAMPLES = 3;
+const unsigned long IMU_SAMPLE_INTERVAL_MS = 5;
+
+float baselineAx = 0.0f;
+float baselineAy = 0.0f;
+float baselineAz = 1.0f;
+unsigned long lastImuSampleMs = 0;
+unsigned long motionSequence = 0;
+byte motionConfirmCount = 0;
+bool motionLatched = false;
 
 // =====================================================
 // 상태 정의
@@ -50,6 +76,103 @@ State currentState = IDLE;
 unsigned long lastToggleTime = 0;
 
 bool blinkOn = false;
+
+// =====================================================
+// MPU6050 helpers
+// =====================================================
+
+void writeMpuRegister(byte reg, byte value) {
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission();
+}
+
+int16_t joinInt16(byte highByte, byte lowByte) {
+  return (int16_t)(((int16_t)highByte << 8) | lowByte);
+}
+
+bool readMpuAcceleration(float &ax, float &ay, float &az) {
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(MPU6050_ACCEL_REGISTER);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(MPU6050_ADDRESS, (byte)6) != 6) {
+    return false;
+  }
+  int16_t rawAx = joinInt16(Wire.read(), Wire.read());
+  int16_t rawAy = joinInt16(Wire.read(), Wire.read());
+  int16_t rawAz = joinInt16(Wire.read(), Wire.read());
+  ax = rawAx / 16384.0f;
+  ay = rawAy / 16384.0f;
+  az = rawAz / 16384.0f;
+  return true;
+}
+
+bool calibrateMpuBaseline() {
+  const int samples = 200;
+  float sumAx = 0.0f;
+  float sumAy = 0.0f;
+  float sumAz = 0.0f;
+  int validSamples = 0;
+
+  for (int i = 0; i < samples; i++) {
+    float ax, ay, az;
+    if (readMpuAcceleration(ax, ay, az)) {
+      sumAx += ax;
+      sumAy += ay;
+      sumAz += az;
+      validSamples++;
+    }
+    delay(5);
+  }
+  if (validSamples < samples / 2) {
+    return false;
+  }
+  baselineAx = sumAx / validSamples;
+  baselineAy = sumAy / validSamples;
+  baselineAz = sumAz / validSamples;
+  return true;
+}
+
+void reportFoamBoardMotion() {
+  unsigned long nowMs = millis();
+  if (nowMs - lastImuSampleMs < IMU_SAMPLE_INTERVAL_MS) {
+    return;
+  }
+  lastImuSampleMs = nowMs;
+
+  float ax, ay, az;
+  if (!readMpuAcceleration(ax, ay, az)) {
+    return;
+  }
+  float dx = ax - baselineAx;
+  float dy = ay - baselineAy;
+  float dz = az - baselineAz;
+  float deltaG = sqrt(dx * dx + dy * dy + dz * dz);
+
+  if (deltaG >= MOTION_DELTA_G) {
+    if (motionConfirmCount < MOTION_CONFIRM_SAMPLES) {
+      motionConfirmCount++;
+    }
+    if (!motionLatched && motionConfirmCount >= MOTION_CONFIRM_SAMPLES) {
+      motionLatched = true;
+      motionSequence++;
+      Serial.print("MOTION,");
+      Serial.print(motionSequence);
+      Serial.print(",");
+      Serial.print(micros());
+      Serial.print(",");
+      Serial.println(deltaG, 4);
+    }
+  } else {
+    motionConfirmCount = 0;
+    if (deltaG < MOTION_DELTA_G * 0.5f) {
+      motionLatched = false;
+    }
+  }
+}
 
 // =====================================================
 // LED 채널 출력
@@ -99,8 +222,11 @@ void allOff() {
 
 void setup() {
 
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial.setTimeout(20);
+
+  Wire.begin();
+  writeMpuRegister(0x6B, 0x00);  // wake MPU6050
 
   pinMode(BUZZER_PIN, OUTPUT);
 
@@ -114,6 +240,12 @@ void setup() {
   allOff();
 
   lastToggleTime = millis();
+
+  if (calibrateMpuBaseline()) {
+    Serial.println("IMU_READY");
+  } else {
+    Serial.println("IMU_ERROR");
+  }
 }
 
 // =====================================================
@@ -124,6 +256,9 @@ void loop() {
 
   // Raspberry Pi 명령 확인
   readSerialCommand();
+
+  // This never controls the relay. It only reports foam-board motion.
+  reportFoamBoardMotion();
 
   // 현재 상태에 따른 출력
   switch (currentState) {

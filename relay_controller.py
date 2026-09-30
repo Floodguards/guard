@@ -54,7 +54,7 @@ def run(can_open_flag):
     return {"relay_on": True, "already_opened": True, "reason": "relay_open_executed"}
 
 
-def run_trial_pulse(duration_s):
+def run_trial_pulse(duration_s, on_started=None):
     """Run one supervised calibration pulse without changing the open latch.
 
     This deliberately has no relationship to the FSM's automatic-opening
@@ -68,8 +68,17 @@ def run_trial_pulse(duration_s):
         raise RuntimeError("릴레이가 초기화되지 않았습니다. init()을 먼저 호출하세요.")
 
     _relay.on()
+    relay_on_monotonic_ns = time.monotonic_ns()
+    if on_started is not None:
+        on_started(relay_on_monotonic_ns)
     try:
         time.sleep(duration_s)
     finally:
+        relay_off_monotonic_ns = time.monotonic_ns()
         _relay.off()
-    return {"relay_on": True, "reason": "trial_relay_pulse_complete"}
+    return {
+        "relay_on": True,
+        "relay_on_monotonic_ns": relay_on_monotonic_ns,
+        "relay_off_monotonic_ns": relay_off_monotonic_ns,
+        "reason": "trial_relay_pulse_complete",
+    }

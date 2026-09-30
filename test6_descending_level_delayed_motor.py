@@ -15,6 +15,7 @@ from datetime import datetime
 import relay_controller
 import sensor_input
 from test5_h_out_16_delayed_motor import (
+    ArduinoMotionListener,
     FIELDNAMES,
     csv_needs_header,
     write_sample,
@@ -61,6 +62,11 @@ def parse_args():
         action="store_true",
         help="IMU roll/pitch도 함께 기록합니다.",
     )
+    parser.add_argument(
+        "--arduino-imu-port", default=None,
+        help="Arduino USB 직렬 포트(예: /dev/ttyACM0). 지정하면 폼보드 IMU 움직임을 기록합니다.",
+    )
+    parser.add_argument("--arduino-imu-baudrate", type=int, default=115200)
     return parser.parse_args()
 
 
@@ -75,8 +81,9 @@ def main():
     if args.csv is None:
         arm_label = f"{args.arm_above_h_out_cm:g}".replace(".", "p")
         target_label = f"{args.trigger_h_out_cm:g}".replace(".", "p")
+        imu_suffix = "_imu_motion" if args.arduino_imu_port else ""
         args.csv = (
-            f"floodguard_test6_descending_from_{arm_label}_to_{target_label}_motor.csv"
+            f"floodguard_test6_descending_from_{arm_label}_to_{target_label}_motor{imu_suffix}.csv"
         )
     if MOTOR_PULSE_S > relay_controller.MAX_RUN_S:
         raise RuntimeError("Test6 모터 펄스 시간이 릴레이 안전 상한을 초과합니다.")
@@ -96,11 +103,21 @@ def main():
     motor_commanded_at_iso = ""
     pulse_thread = None
     pulse_result = {"state": "not_started"}
+    motor_relay_on_monotonic_ns = None
+    motor_relay_on_iso = ""
+    motion_listener = None
+
+    def record_relay_on(monotonic_ns):
+        nonlocal motor_relay_on_monotonic_ns, motor_relay_on_iso
+        motor_relay_on_monotonic_ns = monotonic_ns
+        motor_relay_on_iso = datetime.now().isoformat(timespec="milliseconds")
 
     def run_pulse():
         try:
             pulse_result["state"] = "running"
-            pulse_result["result"] = relay_controller.run_trial_pulse(MOTOR_PULSE_S)
+            pulse_result["result"] = relay_controller.run_trial_pulse(
+                MOTOR_PULSE_S, on_started=record_relay_on
+            )
             pulse_result["state"] = "complete"
         except Exception as exc:
             pulse_result["state"] = "error"
@@ -109,6 +126,11 @@ def main():
     try:
         reader.init()
         reader_initialized = True
+        if args.arduino_imu_port:
+            motion_listener = ArduinoMotionListener(
+                args.arduino_imu_port, args.arduino_imu_baudrate
+            )
+            motion_listener.start()
         relay_controller.init()
         relay_initialized = True
         write_header = csv_needs_header(args.csv)
@@ -182,12 +204,19 @@ def main():
                     phase = "post_motor_recording"
                     motor_command = pulse_result["state"]
 
+                motion_event = (
+                    motion_listener.first_event_after(motor_relay_on_monotonic_ns)
+                    if motion_listener else None
+                )
+
                 # Test5-compatible columns preserve the actual selected target,
                 # target-detection time, and exact software command-request time.
                 write_sample(
                     writer, data, elapsed_s, phase, event,
                     args.trigger_h_out_cm, target_detected_at_iso,
-                    motor_commanded_at_iso, motor_command,
+                    motor_commanded_at_iso, motor_relay_on_iso,
+                    motor_relay_on_monotonic_ns, motor_command,
+                    motion_event,
                 )
                 file.flush()
                 print(
@@ -217,6 +246,8 @@ def main():
             pulse_thread.join()
         if relay_initialized:
             relay_controller.close()
+        if motion_listener is not None:
+            motion_listener.close()
         if reader_initialized:
             reader.shutdown()
 
