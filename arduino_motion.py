@@ -25,6 +25,16 @@ class MotionEvent:
     delta_g: float
 
 
+@dataclass(frozen=True)
+class RawImuSample:
+    received_at_iso: str
+    arduino_micros: int
+    ax_g: float
+    ay_g: float
+    az_g: float
+    delta_g: float
+
+
 class ArduinoMotionListener:
     def __init__(self, port, baudrate=9600):
         self.port = port
@@ -34,6 +44,7 @@ class ArduinoMotionListener:
         self._stop_requested = threading.Event()
         self._lock = threading.Lock()
         self._events = []
+        self._latest_raw_sample = None
 
     def start(self):
         if serial is None:
@@ -58,6 +69,11 @@ class ArduinoMotionListener:
             if event is not None:
                 with self._lock:
                     self._events.append(event)
+                continue
+            raw_sample = self._parse_raw_line(line)
+            if raw_sample is not None:
+                with self._lock:
+                    self._latest_raw_sample = raw_sample
 
     @staticmethod
     def _parse_motion_line(line):
@@ -78,6 +94,23 @@ class ArduinoMotionListener:
             delta_g=delta_g,
         )
 
+    @staticmethod
+    def _parse_raw_line(line):
+        parts = line.split(",")
+        if len(parts) != 6 or parts[0] != "IMU_RAW":
+            return None
+        try:
+            return RawImuSample(
+                received_at_iso=datetime.now().isoformat(timespec="milliseconds"),
+                arduino_micros=int(parts[1]),
+                ax_g=float(parts[2]),
+                ay_g=float(parts[3]),
+                az_g=float(parts[4]),
+                delta_g=float(parts[5]),
+            )
+        except ValueError:
+            return None
+
     def first_event_after(self, monotonic_ns):
         if monotonic_ns is None:
             return None
@@ -86,6 +119,10 @@ class ArduinoMotionListener:
                 if event.received_monotonic_ns >= monotonic_ns:
                     return event
         return None
+
+    def latest_raw_sample(self):
+        with self._lock:
+            return self._latest_raw_sample
 
     def close(self):
         self._stop_requested.set()

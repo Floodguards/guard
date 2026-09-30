@@ -39,6 +39,12 @@ FIELDNAMES = [
     "motion_arduino_micros",
     "motion_delta_g",
     "motion_latency_ms",
+    "imu_raw_received_at",
+    "imu_raw_arduino_micros",
+    "imu_ax_g",
+    "imu_ay_g",
+    "imu_az_g",
+    "imu_raw_delta_g",
     "h_out_cm",
     "h_in_cm",
     "level_difference_cm",
@@ -133,6 +139,7 @@ def write_sample(
     motor_relay_on_monotonic_ns,
     motor_command,
     motion_event,
+    raw_imu_sample,
 ):
     h_out_cm = data["h_out_cm"]
     h_in_cm = data["h_in_cm"]
@@ -154,6 +161,12 @@ def write_sample(
                 rounded_or_blank((motion_event.received_monotonic_ns - motor_relay_on_monotonic_ns) / 1_000_000, 3)
                 if motion_event and motor_relay_on_monotonic_ns is not None else ""
             ),
+            "imu_raw_received_at": raw_imu_sample.received_at_iso if raw_imu_sample else "",
+            "imu_raw_arduino_micros": raw_imu_sample.arduino_micros if raw_imu_sample else "",
+            "imu_ax_g": rounded_or_blank(raw_imu_sample.ax_g, 4) if raw_imu_sample else "",
+            "imu_ay_g": rounded_or_blank(raw_imu_sample.ay_g, 4) if raw_imu_sample else "",
+            "imu_az_g": rounded_or_blank(raw_imu_sample.az_g, 4) if raw_imu_sample else "",
+            "imu_raw_delta_g": rounded_or_blank(raw_imu_sample.delta_g, 4) if raw_imu_sample else "",
             "h_out_cm": h_out_cm if h_out_cm is not None else "",
             "h_in_cm": h_in_cm if h_in_cm is not None else "",
             "level_difference_cm": rounded_or_blank(data["level_difference_cm"]),
@@ -289,13 +302,16 @@ def main():
                     motion_listener.first_event_after(motor_relay_on_monotonic_ns)
                     if motion_listener else None
                 )
+                raw_imu_sample = (
+                    motion_listener.latest_raw_sample() if motion_listener else None
+                )
 
                 write_sample(
                     writer, data, elapsed_s, phase, event,
                     args.trigger_h_out_cm, detected_at_iso,
                     motor_commanded_at_iso, motor_relay_on_iso,
                     motor_relay_on_monotonic_ns, motor_command,
-                    motion_event,
+                    motion_event, raw_imu_sample,
                 )
                 file.flush()
                 print(

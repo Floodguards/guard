@@ -208,6 +208,9 @@ def main():
                     motion_listener.first_event_after(motor_relay_on_monotonic_ns)
                     if motion_listener else None
                 )
+                raw_imu_sample = (
+                    motion_listener.latest_raw_sample() if motion_listener else None
+                )
 
                 # Test5-compatible columns preserve the actual selected target,
                 # target-detection time, and exact software command-request time.
@@ -216,7 +219,7 @@ def main():
                     args.trigger_h_out_cm, target_detected_at_iso,
                     motor_commanded_at_iso, motor_relay_on_iso,
                     motor_relay_on_monotonic_ns, motor_command,
-                    motion_event,
+                    motion_event, raw_imu_sample,
                 )
                 file.flush()
                 print(

@@ -46,11 +46,13 @@ const byte MPU6050_ACCEL_REGISTER = 0x3B;
 const float MOTION_DELTA_G = 0.06f;
 const byte MOTION_CONFIRM_SAMPLES = 3;
 const unsigned long IMU_SAMPLE_INTERVAL_MS = 5;
+const unsigned long RAW_IMU_REPORT_INTERVAL_MS = 100;
 
 float baselineAx = 0.0f;
 float baselineAy = 0.0f;
 float baselineAz = 1.0f;
 unsigned long lastImuSampleMs = 0;
+unsigned long lastRawImuReportMs = 0;
 unsigned long motionSequence = 0;
 byte motionConfirmCount = 0;
 bool motionLatched = false;
@@ -147,10 +149,27 @@ void reportFoamBoardMotion() {
   if (!readMpuAcceleration(ax, ay, az)) {
     return;
   }
+  unsigned long sampleMicros = micros();
   float dx = ax - baselineAx;
   float dy = ay - baselineAy;
   float dz = az - baselineAz;
   float deltaG = sqrt(dx * dx + dy * dy + dz * dz);
+
+  // 10 Hz raw logging is safe at 9600 baud: it is for CSV inspection,
+  // while motion detection itself continues at the 5 ms sampling interval.
+  if (nowMs - lastRawImuReportMs >= RAW_IMU_REPORT_INTERVAL_MS) {
+    lastRawImuReportMs = nowMs;
+    Serial.print("IMU_RAW,");
+    Serial.print(sampleMicros);
+    Serial.print(",");
+    Serial.print(ax, 4);
+    Serial.print(",");
+    Serial.print(ay, 4);
+    Serial.print(",");
+    Serial.print(az, 4);
+    Serial.print(",");
+    Serial.println(deltaG, 4);
+  }
 
   if (deltaG >= MOTION_DELTA_G) {
     if (motionConfirmCount < MOTION_CONFIRM_SAMPLES) {
@@ -162,7 +181,7 @@ void reportFoamBoardMotion() {
       Serial.print("MOTION,");
       Serial.print(motionSequence);
       Serial.print(",");
-      Serial.print(micros());
+      Serial.print(sampleMicros);
       Serial.print(",");
       Serial.println(deltaG, 4);
     }
