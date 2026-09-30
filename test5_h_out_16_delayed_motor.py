@@ -91,8 +91,8 @@ def parse_args():
         help="Arduino USB 직렬 포트(예: /dev/ttyACM0). 지정하면 폼보드 IMU 움직임을 기록합니다.",
     )
     parser.add_argument(
-        "--arduino-imu-baudrate", type=int, default=115200,
-        help="Arduino IMU 직렬 속도(기본값: 115200)",
+        "--arduino-imu-baudrate", type=int, default=9600,
+        help="Arduino IMU 직렬 속도(기본값: 9600)",
     )
     return parser.parse_args()
 

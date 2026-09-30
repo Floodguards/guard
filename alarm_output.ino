@@ -9,7 +9,7 @@
  * HIGH
  * ESCAPE
  *
- * Serial baud rate: 115200
+ * Serial baud rate: 9600
  *
  * Opening-delay measurement extension:
  * MPU6050 is mounted on the foam board and continuously emits only detected
@@ -222,7 +222,7 @@ void allOff() {
 
 void setup() {
 
-  Serial.begin(115200);
+  Serial.begin(9600);
   Serial.setTimeout(20);
 
   Wire.begin();

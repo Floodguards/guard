@@ -26,7 +26,7 @@ class MotionEvent:
 
 
 class ArduinoMotionListener:
-    def __init__(self, port, baudrate=115200):
+    def __init__(self, port, baudrate=9600):
         self.port = port
         self.baudrate = baudrate
         self._connection = None
