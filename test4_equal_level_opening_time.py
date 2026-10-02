@@ -20,6 +20,7 @@ from datetime import datetime
 import pressure_balance
 import relay_controller
 import sensor_input
+from live_level_display import LiveLevelDisplay
 from pi_motion import PiMotionListener, add_imu_arguments, update_imu_data
 from test5_h_out_16_delayed_motor import FIELDNAMES, write_sample
 
@@ -96,6 +97,8 @@ def main():
     motor_relay_on_monotonic_ns = None
     motor_relay_on_iso = ""
     motor_commanded_at_iso = ""
+    stop_pulse = threading.Event()
+    level_display = LiveLevelDisplay()
 
     def record_relay_on(monotonic_ns):
         nonlocal motor_relay_on_monotonic_ns, motor_relay_on_iso
@@ -107,7 +110,9 @@ def main():
     def run_pulse():
         try:
             pulse_result["state"] = "running"
-            pulse_result["result"] = relay_controller.run_trial_pulse(MOTOR_PULSE_S, on_started=record_relay_on)
+            pulse_result["result"] = relay_controller.run_trial_pulse(
+                MOTOR_PULSE_S, on_started=record_relay_on, stop_event=stop_pulse
+            )
             pulse_result["state"] = "complete"
         except Exception as exc:  # Keep a sensor log even if relay control fails.
             pulse_result["state"] = "error"
@@ -168,7 +173,7 @@ def main():
                 file.flush()
                 print(
                     f"t={elapsed_s:.2f}s | phase={phase} | motor={motor_command} | "
-                    f"h_out={data['h_out_cm']} cm | h_in={data['h_in_cm']} cm | "
+                    f"{level_display.format(data)} | "
                     f"F_net={pressure_snapshot(data['h_out_cm'], data['h_in_cm'])} N"
                 )
 
@@ -184,6 +189,7 @@ def main():
     except KeyboardInterrupt:
         print("Test4를 사용자가 종료했습니다.")
     finally:
+        stop_pulse.set()
         if pulse_thread is not None and pulse_thread.is_alive():
             pulse_thread.join()
         if relay_initialized:

@@ -4,15 +4,56 @@ import importlib
 import io
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
 from contextlib import ExitStack, redirect_stdout
 
 import pi_motion
+import relay_controller
+from live_level_display import LiveLevelDisplay
 
 
 class PiImuTests(unittest.TestCase):
+    def test_live_inside_level_and_sensor_warning(self):
+        display = LiveLevelDisplay()
+        data = dict(h_out_cm=8.0, h_in_cm=1.0, outside_valid=True,
+                    inside_valid=True, loop_time=1.0)
+        self.assertIn('h_out=8.00cm | h_in=1.00cm', display.format(data))
+        data.update(h_in_cm=3.0, loop_time=1.1)
+        self.assertIn('내부 수위 급변 +2.00cm', display.format(data))
+        data.update(h_in_cm=None, inside_valid=False, loop_time=1.2)
+        self.assertIn('h_in=측정 실패 | 내부 센서 확인 필요', display.format(data))
+
+    def test_interrupted_trial_pulse_turns_relay_off(self):
+        class FakeRelay:
+            def __init__(self):
+                self.active = False
+
+            def on(self):
+                self.active = True
+
+            def off(self):
+                self.active = False
+
+        relay = FakeRelay()
+        stop = threading.Event()
+        started = threading.Event()
+        with patch.object(relay_controller, '_relay', relay):
+            worker = threading.Thread(
+                target=relay_controller.run_trial_pulse,
+                args=(2.0,),
+                kwargs={'stop_event': stop, 'on_started': lambda _: started.set()},
+            )
+            worker.start()
+            self.assertTrue(started.wait(timeout=0.5))
+            self.assertTrue(relay.active)
+            stop.set()
+            worker.join(timeout=0.5)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(relay.active)
+
     def test_confirmation_requires_sustained_post_relay_samples(self):
         listener = pi_motion.PiMotionListener()
         record = lambda accel, start, end: listener._record(accel, start * 500_000, end * 500_000)
@@ -123,18 +164,20 @@ class PiImuTests(unittest.TestCase):
                     imu_ctor = stack.enter_context(patch.object(module, 'PiMotionListener', return_value=listener))
                     stack.enter_context(patch.object(module.relay_controller, 'init'))
                     stack.enter_context(patch.object(module.relay_controller, 'close'))
-                    def pulse(duration, on_started):
+                    def pulse(duration, on_started, stop_event=None):
                         on_started(time.monotonic_ns())
                         return {'relay_on': True}
                     relay = stack.enter_context(patch.object(module.relay_controller, 'run_trial_pulse', side_effect=pulse))
                     for constant in ('PRE_MOTOR_RECORD_S', 'DELAY_AFTER_DETECTION_S', 'MOTOR_PULSE_S', 'POST_MOTOR_RECORD_S'):
                         if hasattr(module, constant):
                             stack.enter_context(patch.object(module, constant, 0.002))
-                    with redirect_stdout(io.StringIO()):
+                    output = io.StringIO()
+                    with redirect_stdout(output):
                         module.main()
                     with path.open(encoding='utf-8') as file:
                         rows = list(csv.DictReader(file))
                     self.assertTrue(rows)
+                    self.assertIn('h_in=16.00cm', output.getvalue())
                     self.assertTrue(any(row['motor_relay_on_at'] for row in rows))
                     self.assertEqual(rows[-1]['imu_valid'], '1' if enabled else '0')
                     self.assertIn('motion_pi_monotonic_ns', rows[-1])

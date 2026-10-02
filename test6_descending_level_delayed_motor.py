@@ -16,6 +16,7 @@ from datetime import datetime
 
 import relay_controller
 import sensor_input
+from live_level_display import LiveLevelDisplay
 from pi_motion import PiMotionListener, add_imu_arguments, update_imu_data
 from test5_h_out_16_delayed_motor import (
     FIELDNAMES,
@@ -99,6 +100,8 @@ def main():
     motor_relay_on_monotonic_ns = None
     motor_relay_on_iso = ""
     motion_listener = None
+    stop_pulse = threading.Event()
+    level_display = LiveLevelDisplay()
 
     def record_relay_on(monotonic_ns):
         nonlocal motor_relay_on_monotonic_ns, motor_relay_on_iso
@@ -111,7 +114,7 @@ def main():
         try:
             pulse_result["state"] = "running"
             pulse_result["result"] = relay_controller.run_trial_pulse(
-                MOTOR_PULSE_S, on_started=record_relay_on
+                MOTOR_PULSE_S, on_started=record_relay_on, stop_event=stop_pulse
             )
             pulse_result["state"] = "complete"
         except Exception as exc:
@@ -219,7 +222,7 @@ def main():
                 file.flush()
                 print(
                     f"t={elapsed_s:.2f}s | phase={phase} | event={event or '-'} | "
-                    f"h_out={h_out_cm} cm | motor={motor_command}"
+                    f"{level_display.format(data)} | motor={motor_command}"
                 )
 
                 if (
@@ -240,6 +243,7 @@ def main():
     except KeyboardInterrupt:
         print("Test6를 사용자가 종료했습니다.")
     finally:
+        stop_pulse.set()
         if pulse_thread is not None and pulse_thread.is_alive():
             pulse_thread.join()
         if relay_initialized:
