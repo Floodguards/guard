@@ -5,6 +5,9 @@ script records from the start, waits 3 seconds, drives the relay for 2 seconds,
 then records a further 3 seconds and exits.  The resulting CSV opens directly
 in Excel.  It records the command timing; physical panel-open completion still
 needs to be observed by video or an independent position sensor.
+
+Pi I2C IMU recording is enabled by default (disable with --no-imu).
+Motion latency measures confirmed acceleration change, not fully-open time.
 """
 
 import argparse
@@ -17,34 +20,16 @@ from datetime import datetime
 import pressure_balance
 import relay_controller
 import sensor_input
+from pi_motion import PiMotionListener, add_imu_arguments, update_imu_data
+from test5_h_out_16_delayed_motor import FIELDNAMES, write_sample
 
 
-DEFAULT_CSV = "floodguard_test4_equal_level_opening_time.csv"
+DEFAULT_CSV = "floodguard_test4_equal_level_opening_time_pi_imu.csv"
 LOOP_INTERVAL_S = 0.1
 PRE_MOTOR_RECORD_S = 3.0
 MOTOR_PULSE_S = 2.0
 POST_MOTOR_RECORD_S = 3.0
 
-FIELDNAMES = [
-    "timestamp",
-    "elapsed_s",
-    "phase",
-    "motor_command",
-    "h_out_cm",
-    "h_in_cm",
-    "level_difference_cm",
-    "f_net_n",
-    "outside_raw_distance_cm",
-    "outside_distance_cm",
-    "inside_raw_distance_cm",
-    "inside_distance_cm",
-    "outside_valid",
-    "inside_valid",
-    "sensor_valid",
-    "roll_deg",
-    "pitch_deg",
-    "imu_valid",
-]
 
 
 def parse_args():
@@ -62,11 +47,7 @@ def parse_args():
         default=LOOP_INTERVAL_S,
         help="기록 간격(초, 기본값: 0.1)",
     )
-    parser.add_argument(
-        "--use-imu",
-        action="store_true",
-        help="IMU roll/pitch도 함께 기록합니다.",
-    )
+    add_imu_arguments(parser)
     return parser.parse_args()
 
 
@@ -93,33 +74,6 @@ def pressure_snapshot(h_out_cm, h_in_cm):
     return pressure_balance.compute_f_net_n(h_out_cm, h_in_cm)
 
 
-def write_sample(writer, data, elapsed_s, phase, motor_command):
-    h_out_cm = data["h_out_cm"]
-    h_in_cm = data["h_in_cm"]
-    writer.writerow(
-        {
-            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
-            "elapsed_s": rounded_or_blank(elapsed_s),
-            "phase": phase,
-            "motor_command": motor_command,
-            "h_out_cm": h_out_cm if h_out_cm is not None else "",
-            "h_in_cm": h_in_cm if h_in_cm is not None else "",
-            "level_difference_cm": rounded_or_blank(data["level_difference_cm"]),
-            "f_net_n": rounded_or_blank(pressure_snapshot(h_out_cm, h_in_cm)),
-            "outside_raw_distance_cm": data["outside_raw_distance_cm"],
-            "outside_distance_cm": data["outside_distance_cm"],
-            "inside_raw_distance_cm": data["inside_raw_distance_cm"],
-            "inside_distance_cm": data["inside_distance_cm"],
-            "outside_valid": int(data["outside_valid"]),
-            "inside_valid": int(data["inside_valid"]),
-            "sensor_valid": int(data["outside_valid"] and data["inside_valid"]),
-            "roll_deg": rounded_or_blank(data["roll_deg"], 2),
-            "pitch_deg": rounded_or_blank(data["pitch_deg"], 2),
-            "imu_valid": int(data["imu_valid"]),
-        }
-    )
-
-
 def main():
     args = parse_args()
     if args.interval <= 0:
@@ -132,17 +86,28 @@ def main():
             "먼저 빈 수조에서 test2의 --calibrate-empty-tank를 실행하세요."
         )
 
-    reader = sensor_input.SensorReader(use_imu=args.use_imu)
+    reader = sensor_input.SensorReader(use_imu=False)
     reader_initialized = False
     relay_initialized = False
     pulse_started = False
     pulse_result = {"state": "not_started"}
     pulse_thread = None
+    motion_listener = None
+    motor_relay_on_monotonic_ns = None
+    motor_relay_on_iso = ""
+    motor_commanded_at_iso = ""
+
+    def record_relay_on(monotonic_ns):
+        nonlocal motor_relay_on_monotonic_ns, motor_relay_on_iso
+        if motion_listener is not None:
+            motion_listener.arm(monotonic_ns)
+        motor_relay_on_monotonic_ns = monotonic_ns
+        motor_relay_on_iso = datetime.now().isoformat(timespec="milliseconds")
 
     def run_pulse():
         try:
             pulse_result["state"] = "running"
-            pulse_result["result"] = relay_controller.run_trial_pulse(MOTOR_PULSE_S)
+            pulse_result["result"] = relay_controller.run_trial_pulse(MOTOR_PULSE_S, on_started=record_relay_on)
             pulse_result["state"] = "complete"
         except Exception as exc:  # Keep a sensor log even if relay control fails.
             pulse_result["state"] = "error"
@@ -151,6 +116,9 @@ def main():
     try:
         reader.init()
         reader_initialized = True
+        if args.use_imu:
+            motion_listener = PiMotionListener()
+            motion_listener.start()
         relay_controller.init()
         relay_initialized = True
         write_header = csv_needs_header(args.csv)
@@ -174,6 +142,7 @@ def main():
                 elapsed_s = loop_start - started_at
                 if not pulse_started and elapsed_s >= PRE_MOTOR_RECORD_S:
                     pulse_started = True
+                    motor_commanded_at_iso = datetime.now().isoformat(timespec="milliseconds")
                     pulse_thread = threading.Thread(target=run_pulse, daemon=True)
                     pulse_thread.start()
 
@@ -188,7 +157,14 @@ def main():
                     motor_command = pulse_result["state"]
 
                 data = reader.read_all()
-                write_sample(writer, data, elapsed_s, phase, motor_command)
+                motion_event = (motion_listener.first_event_after(motor_relay_on_monotonic_ns)
+                                if motion_listener else None)
+                raw_imu_sample = motion_listener.latest_raw_sample() if motion_listener else None
+                update_imu_data(data, raw_imu_sample)
+                write_sample(writer, data, elapsed_s, phase, "", None, "",
+                             motor_commanded_at_iso, motor_relay_on_iso,
+                             motor_relay_on_monotonic_ns, motor_command,
+                             motion_event, raw_imu_sample)
                 file.flush()
                 print(
                     f"t={elapsed_s:.2f}s | phase={phase} | motor={motor_command} | "
@@ -212,8 +188,9 @@ def main():
             pulse_thread.join()
         if relay_initialized:
             relay_controller.close()
-        if reader_initialized:
-            reader.shutdown()
+        if motion_listener is not None:
+            motion_listener.close()
+        reader.shutdown()
 
 
 if __name__ == "__main__":

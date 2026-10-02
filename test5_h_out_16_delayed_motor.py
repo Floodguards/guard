@@ -4,6 +4,9 @@ The script records continuously. After a valid h_out measurement reaches the
 selected target, it records the detection time, waits 3 seconds while
 continuing to log, requests a 2-second relay pulse, records the command time,
 then records 3 more seconds. The CSV is directly usable in Excel.
+
+Pi I2C IMU recording is enabled by default (disable with --no-imu).
+Motion latency measures confirmed acceleration change, not fully-open time.
 """
 
 import argparse
@@ -16,7 +19,7 @@ from datetime import datetime
 import pressure_balance
 import relay_controller
 import sensor_input
-from arduino_motion import ArduinoMotionListener
+from pi_motion import PiMotionListener, add_imu_arguments, update_imu_data
 
 
 DEFAULT_TRIGGER_H_OUT_CM = 16.0
@@ -36,11 +39,11 @@ FIELDNAMES = [
     "motor_relay_on_at",
     "motor_command",
     "motion_detected_at",
-    "motion_arduino_micros",
+    "motion_pi_monotonic_ns",
     "motion_delta_g",
     "motion_latency_ms",
     "imu_raw_received_at",
-    "imu_raw_arduino_micros",
+    "imu_raw_pi_monotonic_ns",
     "imu_ax_g",
     "imu_ay_g",
     "imu_az_g",
@@ -86,20 +89,7 @@ def parse_args():
         default=LOOP_INTERVAL_S,
         help="기록 간격(초, 기본값: 0.1)",
     )
-    parser.add_argument(
-        "--use-imu",
-        action="store_true",
-        help="IMU roll/pitch도 함께 기록합니다.",
-    )
-    parser.add_argument(
-        "--arduino-imu-port",
-        default=None,
-        help="Arduino USB 직렬 포트(예: /dev/ttyACM0). 지정하면 폼보드 IMU 움직임을 기록합니다.",
-    )
-    parser.add_argument(
-        "--arduino-imu-baudrate", type=int, default=9600,
-        help="Arduino IMU 직렬 속도(기본값: 9600)",
-    )
+    add_imu_arguments(parser)
     return parser.parse_args()
 
 
@@ -155,14 +145,14 @@ def write_sample(
             "motor_relay_on_at": motor_relay_on_at,
             "motor_command": motor_command,
             "motion_detected_at": motion_event.received_at_iso if motion_event else "",
-            "motion_arduino_micros": motion_event.arduino_micros if motion_event else "",
+            "motion_pi_monotonic_ns": motion_event.received_monotonic_ns if motion_event else "",
             "motion_delta_g": rounded_or_blank(motion_event.delta_g, 4) if motion_event else "",
             "motion_latency_ms": (
                 rounded_or_blank((motion_event.received_monotonic_ns - motor_relay_on_monotonic_ns) / 1_000_000, 3)
                 if motion_event and motor_relay_on_monotonic_ns is not None else ""
             ),
             "imu_raw_received_at": raw_imu_sample.received_at_iso if raw_imu_sample else "",
-            "imu_raw_arduino_micros": raw_imu_sample.arduino_micros if raw_imu_sample else "",
+            "imu_raw_pi_monotonic_ns": raw_imu_sample.received_monotonic_ns if raw_imu_sample else "",
             "imu_ax_g": rounded_or_blank(raw_imu_sample.ax_g, 4) if raw_imu_sample else "",
             "imu_ay_g": rounded_or_blank(raw_imu_sample.ay_g, 4) if raw_imu_sample else "",
             "imu_az_g": rounded_or_blank(raw_imu_sample.az_g, 4) if raw_imu_sample else "",
@@ -193,7 +183,7 @@ def main():
         raise SystemExit("--trigger-h-out-cm은 0 이상이어야 합니다.")
     if args.csv is None:
         target_label = f"{args.trigger_h_out_cm:g}".replace(".", "p")
-        imu_suffix = "_imu_motion" if args.arduino_imu_port else ""
+        imu_suffix = "_pi_imu_motion" if args.use_imu else "_no_imu"
         args.csv = f"floodguard_test5_h_out_{target_label}_delayed_motor{imu_suffix}.csv"
     if MOTOR_PULSE_S > relay_controller.MAX_RUN_S:
         raise RuntimeError("Test5 모터 펄스 시간이 릴레이 안전 상한을 초과합니다.")
@@ -203,7 +193,7 @@ def main():
             "먼저 빈 수조에서 test2의 --calibrate-empty-tank를 실행하세요."
         )
 
-    reader = sensor_input.SensorReader(use_imu=args.use_imu)
+    reader = sensor_input.SensorReader(use_imu=False)
     reader_initialized = False
     relay_initialized = False
     detected_at_monotonic = None
@@ -218,6 +208,8 @@ def main():
 
     def record_relay_on(monotonic_ns):
         nonlocal motor_relay_on_monotonic_ns, motor_relay_on_iso
+        if motion_listener is not None:
+            motion_listener.arm(monotonic_ns)
         motor_relay_on_monotonic_ns = monotonic_ns
         motor_relay_on_iso = datetime.now().isoformat(timespec="milliseconds")
 
@@ -235,10 +227,8 @@ def main():
     try:
         reader.init()
         reader_initialized = True
-        if args.arduino_imu_port:
-            motion_listener = ArduinoMotionListener(
-                args.arduino_imu_port, args.arduino_imu_baudrate
-            )
+        if args.use_imu:
+            motion_listener = PiMotionListener()
             motion_listener.start()
         relay_controller.init()
         relay_initialized = True
@@ -306,6 +296,8 @@ def main():
                     motion_listener.latest_raw_sample() if motion_listener else None
                 )
 
+                update_imu_data(data, raw_imu_sample)
+
                 write_sample(
                     writer, data, elapsed_s, phase, event,
                     args.trigger_h_out_cm, detected_at_iso,
@@ -343,8 +335,7 @@ def main():
             relay_controller.close()
         if motion_listener is not None:
             motion_listener.close()
-        if reader_initialized:
-            reader.shutdown()
+        reader.shutdown()
 
 
 if __name__ == "__main__":

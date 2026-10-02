@@ -4,6 +4,8 @@ The test first requires a valid h_out value above the arm level (16 cm by
 default). It then waits for h_out to fall to the selected target, records that
 crossing, waits 3 seconds, runs a 2-second relay pulse, records 3 more seconds,
 and exits. Each execution performs one attempt only.
+
+Pi I2C IMU recording is enabled by default (disable with --no-imu).
 """
 
 import argparse
@@ -14,8 +16,8 @@ from datetime import datetime
 
 import relay_controller
 import sensor_input
+from pi_motion import PiMotionListener, add_imu_arguments, update_imu_data
 from test5_h_out_16_delayed_motor import (
-    ArduinoMotionListener,
     FIELDNAMES,
     csv_needs_header,
     write_sample,
@@ -57,16 +59,7 @@ def parse_args():
         default=LOOP_INTERVAL_S,
         help="기록 간격(초, 기본값: 0.1)",
     )
-    parser.add_argument(
-        "--use-imu",
-        action="store_true",
-        help="IMU roll/pitch도 함께 기록합니다.",
-    )
-    parser.add_argument(
-        "--arduino-imu-port", default=None,
-        help="Arduino USB 직렬 포트(예: /dev/ttyACM0). 지정하면 폼보드 IMU 움직임을 기록합니다.",
-    )
-    parser.add_argument("--arduino-imu-baudrate", type=int, default=9600)
+    add_imu_arguments(parser)
     return parser.parse_args()
 
 
@@ -81,7 +74,7 @@ def main():
     if args.csv is None:
         arm_label = f"{args.arm_above_h_out_cm:g}".replace(".", "p")
         target_label = f"{args.trigger_h_out_cm:g}".replace(".", "p")
-        imu_suffix = "_imu_motion" if args.arduino_imu_port else ""
+        imu_suffix = "_pi_imu_motion" if args.use_imu else "_no_imu"
         args.csv = (
             f"floodguard_test6_descending_from_{arm_label}_to_{target_label}_motor{imu_suffix}.csv"
         )
@@ -93,7 +86,7 @@ def main():
             "먼저 빈 수조에서 test2의 --calibrate-empty-tank를 실행하세요."
         )
 
-    reader = sensor_input.SensorReader(use_imu=args.use_imu)
+    reader = sensor_input.SensorReader(use_imu=False)
     reader_initialized = False
     relay_initialized = False
     armed_at_iso = ""
@@ -109,6 +102,8 @@ def main():
 
     def record_relay_on(monotonic_ns):
         nonlocal motor_relay_on_monotonic_ns, motor_relay_on_iso
+        if motion_listener is not None:
+            motion_listener.arm(monotonic_ns)
         motor_relay_on_monotonic_ns = monotonic_ns
         motor_relay_on_iso = datetime.now().isoformat(timespec="milliseconds")
 
@@ -126,10 +121,8 @@ def main():
     try:
         reader.init()
         reader_initialized = True
-        if args.arduino_imu_port:
-            motion_listener = ArduinoMotionListener(
-                args.arduino_imu_port, args.arduino_imu_baudrate
-            )
+        if args.use_imu:
+            motion_listener = PiMotionListener()
             motion_listener.start()
         relay_controller.init()
         relay_initialized = True
@@ -212,6 +205,8 @@ def main():
                     motion_listener.latest_raw_sample() if motion_listener else None
                 )
 
+                update_imu_data(data, raw_imu_sample)
+
                 # Test5-compatible columns preserve the actual selected target,
                 # target-detection time, and exact software command-request time.
                 write_sample(
@@ -251,8 +246,7 @@ def main():
             relay_controller.close()
         if motion_listener is not None:
             motion_listener.close()
-        if reader_initialized:
-            reader.shutdown()
+        reader.shutdown()
 
 
 if __name__ == "__main__":
