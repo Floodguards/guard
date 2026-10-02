@@ -19,6 +19,14 @@ VALID_STATES = {"IDLE", "LOW", "MID", "HIGH", "ESCAPE"}
 _serial_conn = None
 _last_sent_state = None
 
+
+def _arduino_state(state):
+    """경보 실험: 내부 ESCAPE 상태도 Arduino에는 HIGH로 전달한다."""
+    state = state.upper()
+    if state not in VALID_STATES:
+        raise ValueError(f"Invalid state: {state}")
+    return "HIGH" if state == "ESCAPE" else state
+
 @dataclass(frozen=True)
 class SerialConfig:
     port: str = PORT
@@ -41,9 +49,7 @@ class SerialStateSender:
         time.sleep(self.config.reset_wait_s)
 
     def send_state(self, state):
-        state = state.upper()
-        if state not in VALID_STATES:
-            raise ValueError(f"Invalid state: {state}")
+        state = _arduino_state(state)
         if state == self._last_sent_state:
             return False
 
@@ -70,10 +76,7 @@ def init():
 def send_state(state):
     global _last_sent_state
 
-    state = state.upper()
-
-    if state not in VALID_STATES:
-        raise ValueError(f"Invalid state: {state}")
+    state = _arduino_state(state)
 
     if state == _last_sent_state:
         return False
