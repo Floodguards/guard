@@ -24,7 +24,7 @@ from pi_motion import PiMotionListener, add_imu_arguments, update_imu_data
 from test5_h_out_16_delayed_motor import FIELDNAMES, write_sample
 
 
-DEFAULT_CSV = "floodguard_test4_equal_level_opening_time_pi_imu.csv"
+DEFAULT_CSV = "floodguard_test4_equal_level_opening_time_pi_imu_x005.csv"
 LOOP_INTERVAL_S = 0.1
 PRE_MOTOR_RECORD_S = 3.0
 MOTOR_PULSE_S = 2.0

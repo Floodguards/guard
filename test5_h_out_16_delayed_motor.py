@@ -41,6 +41,9 @@ FIELDNAMES = [
     "motion_detected_at",
     "motion_pi_monotonic_ns",
     "motion_delta_g",
+    "motion_x_delta_g",
+    "motion_confirmed_at",
+    "motion_confirmation_ms",
     "motion_latency_ms",
     "imu_raw_received_at",
     "imu_raw_pi_monotonic_ns",
@@ -48,6 +51,7 @@ FIELDNAMES = [
     "imu_ay_g",
     "imu_az_g",
     "imu_raw_delta_g",
+    "imu_x_delta_g",
     "h_out_cm",
     "h_in_cm",
     "level_difference_cm",
@@ -147,6 +151,12 @@ def write_sample(
             "motion_detected_at": motion_event.received_at_iso if motion_event else "",
             "motion_pi_monotonic_ns": motion_event.received_monotonic_ns if motion_event else "",
             "motion_delta_g": rounded_or_blank(motion_event.delta_g, 4) if motion_event else "",
+            "motion_x_delta_g": rounded_or_blank(motion_event.x_delta_g, 4) if motion_event else "",
+            "motion_confirmed_at": motion_event.confirmed_at_iso if motion_event else "",
+            "motion_confirmation_ms": (
+                rounded_or_blank((motion_event.confirmed_monotonic_ns - motion_event.received_monotonic_ns) / 1_000_000)
+                if motion_event else ""
+            ),
             "motion_latency_ms": (
                 rounded_or_blank((motion_event.received_monotonic_ns - motor_relay_on_monotonic_ns) / 1_000_000, 3)
                 if motion_event and motor_relay_on_monotonic_ns is not None else ""
@@ -157,6 +167,7 @@ def write_sample(
             "imu_ay_g": rounded_or_blank(raw_imu_sample.ay_g, 4) if raw_imu_sample else "",
             "imu_az_g": rounded_or_blank(raw_imu_sample.az_g, 4) if raw_imu_sample else "",
             "imu_raw_delta_g": rounded_or_blank(raw_imu_sample.delta_g, 4) if raw_imu_sample else "",
+            "imu_x_delta_g": rounded_or_blank(raw_imu_sample.x_delta_g, 4) if raw_imu_sample else "",
             "h_out_cm": h_out_cm if h_out_cm is not None else "",
             "h_in_cm": h_in_cm if h_in_cm is not None else "",
             "level_difference_cm": rounded_or_blank(data["level_difference_cm"]),
@@ -183,7 +194,7 @@ def main():
         raise SystemExit("--trigger-h-out-cm은 0 이상이어야 합니다.")
     if args.csv is None:
         target_label = f"{args.trigger_h_out_cm:g}".replace(".", "p")
-        imu_suffix = "_pi_imu_motion" if args.use_imu else "_no_imu"
+        imu_suffix = "_pi_imu_x005" if args.use_imu else "_no_imu_x005"
         args.csv = f"floodguard_test5_h_out_{target_label}_delayed_motor{imu_suffix}.csv"
     if MOTOR_PULSE_S > relay_controller.MAX_RUN_S:
         raise RuntimeError("Test5 모터 펄스 시간이 릴레이 안전 상한을 초과합니다.")

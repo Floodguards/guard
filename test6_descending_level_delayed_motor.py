@@ -74,7 +74,7 @@ def main():
     if args.csv is None:
         arm_label = f"{args.arm_above_h_out_cm:g}".replace(".", "p")
         target_label = f"{args.trigger_h_out_cm:g}".replace(".", "p")
-        imu_suffix = "_pi_imu_motion" if args.use_imu else "_no_imu"
+        imu_suffix = "_pi_imu_x005" if args.use_imu else "_no_imu_x005"
         args.csv = (
             f"floodguard_test6_descending_from_{arm_label}_to_{target_label}_motor{imu_suffix}.csv"
         )

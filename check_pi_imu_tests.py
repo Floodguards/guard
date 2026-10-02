@@ -13,22 +13,58 @@ import pi_motion
 
 
 class PiImuTests(unittest.TestCase):
-    def test_confirmation_requires_three_post_relay_samples(self):
+    def test_confirmation_requires_sustained_post_relay_samples(self):
         listener = pi_motion.PiMotionListener()
+        record = lambda accel, start, end: listener._record(accel, start * 500_000, end * 500_000)
         for t in (10, 20, 30):
-            listener._record((0.1, 0, 1), t, t + 1)
-        listener.arm(40)
-        listener._record((0.1, 0, 1), 39, 41)  # read straddles ON
+            record((0.1, 0, 1), t, t + 1)
+        listener.arm(40 * 500_000)
+        record((0.1, 0, 1), 39, 41)  # read straddles ON
         for t in (50, 60):
-            listener._record((0.1, 0, 1), t, t + 1)
+            record((0.1, 0, 1), t, t + 1)
         self.assertIsNone(listener.first_event_after(40))
-        listener._record((0, 0, 1), 70, 71)  # noise resets confirmation
+        record((0, 0, 1), 70, 71)  # noise resets confirmation
         for t in (80, 90, 100):
-            listener._record((0.1, 0, 1), t, t + 1)
+            record((0.1, 0, 1), t, t + 1)
         event = listener.first_event_after(40)
-        self.assertEqual(event.received_monotonic_ns, 101)
-        listener._record((0.2, 0, 1), 110, 111)
+        self.assertEqual(event.received_monotonic_ns, 81 * 500_000)
+        self.assertEqual(event.confirmed_monotonic_ns, 101 * 500_000)
+        record((0.2, 0, 1), 110, 111)
         self.assertIs(listener.first_event_after(40), event)
+
+    def test_two_ms_polling_does_not_shorten_confirmation(self):
+        listener = pi_motion.PiMotionListener()
+        listener.arm(0)
+        for t in (0, 2, 4, 6, 8):
+            listener._record((0.1, 0, 1), t * 1_000_000, t * 1_000_000)
+            self.assertIsNone(listener.first_event_after(0))
+        listener._record((0.1, 0, 1), 10_000_000, 10_000_000)
+        self.assertEqual(listener.first_event_after(0).received_monotonic_ns, 0)
+        self.assertEqual(listener.first_event_after(0).confirmed_monotonic_ns, 10_000_000)
+
+    def test_yz_only_and_threshold_equality_do_not_trigger(self):
+        for x in (0, 0.05, -0.05):
+            listener = pi_motion.PiMotionListener()
+            listener.arm(0)
+            for t in range(0, 22, 2):
+                listener._record((x, 0.9, 1.8), t * 1_000_000, t * 1_000_000)
+            self.assertIsNone(listener.first_event_after(0))
+            self.assertEqual(listener._latest.ay_g, 0.9)
+            self.assertEqual(listener._latest.az_g, 1.8)
+
+    def test_negative_x_relative_to_baseline_and_gap_restart(self):
+        listener = pi_motion.PiMotionListener()
+        listener._baseline = (-1, 0, 0)
+        listener.arm(0)
+        for t in (0, 2, 4, 20, 22, 24, 26, 28):
+            listener._record((-1.06, 0, 0), t * 1_000_000, t * 1_000_000)
+            self.assertIsNone(listener.first_event_after(0))
+        listener._record((-1.06, 0, 0), 30_000_000, 30_000_000)
+        event = listener.first_event_after(0)
+        self.assertEqual(event.received_monotonic_ns, 20_000_000)
+        self.assertAlmostEqual(event.x_delta_g, -0.06)
+        listener.arm(40_000_000)
+        self.assertIsNone(listener.first_event_after(40_000_000))
 
     def test_signed_acceleration_and_stale_sample(self):
         listener = pi_motion.PiMotionListener()
@@ -76,7 +112,11 @@ class PiImuTests(unittest.TestCase):
                     listener = Mock()
                     sample = pi_motion.ImuSample(time.monotonic_ns(), 'sample', 0, 0, 1, 0)
                     listener.latest_raw_sample.return_value = sample
-                    listener.first_event_after.return_value = None
+                    listener.first_event_after.side_effect = lambda ns: (
+                        pi_motion.MotionEvent(ns + 20_000_000, 'candidate', 0.2, -0.06,
+                                              ns + 30_000_000, 'confirmed')
+                        if ns is not None else None
+                    )
                     stack.enter_context(patch('sys.argv', [name, '--csv', str(path), '--interval', '0.001'] + ([] if enabled else ['--no-imu'])))
                     stack.enter_context(patch.object(module.os.path, 'isfile', return_value=True))
                     ctor = stack.enter_context(patch.object(module.sensor_input, 'SensorReader', return_value=reader))
@@ -103,6 +143,11 @@ class PiImuTests(unittest.TestCase):
                     relay.assert_called_once()
                     reader.shutdown.assert_called_once()
                     if enabled:
+                        self.assertEqual(rows[-1]['motion_latency_ms'], '20.0')
+                        self.assertEqual(rows[-1]['motion_confirmation_ms'], '10.0')
+                        self.assertEqual(rows[-1]['motion_detected_at'], 'candidate')
+                        self.assertEqual(rows[-1]['motion_confirmed_at'], 'confirmed')
+                        self.assertEqual(rows[-1]['motion_x_delta_g'], '-0.06')
                         listener.start.assert_called_once()
                         listener.arm.assert_called_once()
                         listener.close.assert_called_once()

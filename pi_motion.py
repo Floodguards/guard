@@ -1,6 +1,7 @@
 """Pi I2C MPU6050 sampling, independent of the slower water-level loop.
 
-Motion uses the Arduino experiment's 0.06 g / three consecutive samples rule.
+Motion uses abs(ax - baseline_ax) > 0.05 g sustained for at least 10 ms.
+Confirmed events retain the FIRST candidate timestamp, excluding confirmation delay.
 Timestamps are Pi monotonic times after each read, not hardware interrupt times.
 """
 
@@ -29,6 +30,17 @@ class ImuSample:
     ay_g: float
     az_g: float
     delta_g: float
+    x_delta_g: float = 0.0
+
+
+@dataclass(frozen=True)
+class MotionEvent:
+    received_monotonic_ns: int
+    received_at_iso: str
+    delta_g: float
+    x_delta_g: float
+    confirmed_monotonic_ns: int
+    confirmed_at_iso: str
 
 
 def add_imu_arguments(parser):
@@ -39,7 +51,11 @@ def add_imu_arguments(parser):
 
 
 class PiMotionListener:
-    INTERVAL_S = 0.005
+    INTERVAL_S = 0.002  # Target polling interval; Linux scheduling may delay reads.
+    CALIBRATION_INTERVAL_S = 0.005  # Keep startup calibration at about one second.
+    CONFIRM_DURATION_NS = 10_000_000
+    MOTION_THRESHOLD_G = 0.05
+    MAX_SAMPLE_GAP_NS = 6_000_000  # A long unobserved gap cannot confirm persistence.
 
     def __init__(self):
         self._bus = None
@@ -51,6 +67,8 @@ class PiMotionListener:
         self._armed_ns = None
         self._motion = None
         self._count = 0
+        self._candidate = None
+        self._previous_sample_ns = None
         self._error = ''
 
     def _read_accel(self):
@@ -72,7 +90,7 @@ class PiMotionListener:
             samples = []
             for _ in range(200):
                 samples.append(self._read_accel())
-                time.sleep(self.INTERVAL_S)
+                time.sleep(self.CALIBRATION_INTERVAL_S)
             self._baseline = tuple(sum(v[i] for v in samples) / len(samples)
                                    for i in range(3))
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
@@ -82,23 +100,43 @@ class PiMotionListener:
             raise
 
     def arm(self, monotonic_ns):
-        # Require all three confirming samples to be acquired after relay ON.
+        # Every candidate and confirming sample must be acquired after relay ON.
         with self._lock:
             self._armed_ns = monotonic_ns
             self._motion = None
             self._count = 0
+            self._candidate = None
+            self._previous_sample_ns = None
 
     def _record(self, acceleration, read_started_ns, sampled_ns):
         delta = math.sqrt(sum((v - b) ** 2 for v, b in zip(acceleration, self._baseline)))
+        x_delta = acceleration[0] - self._baseline[0]
         sample = ImuSample(sampled_ns, datetime.now().isoformat(timespec='milliseconds'),
-                           *acceleration, delta)
+                           *acceleration, delta, x_delta)
         with self._lock:
             self._latest = sample
             self._error = ''
             if self._armed_ns is not None and read_started_ns >= self._armed_ns:
-                self._count = self._count + 1 if delta >= 0.06 else 0
-                if self._count >= 3 and self._motion is None:
-                    self._motion = sample
+                if (self._previous_sample_ns is not None
+                        and sampled_ns - self._previous_sample_ns > self.MAX_SAMPLE_GAP_NS):
+                    self._count = 0
+                    self._candidate = None
+                self._previous_sample_ns = sampled_ns
+                if abs(x_delta) > self.MOTION_THRESHOLD_G:
+                    self._count += 1
+                    if self._candidate is None:
+                        self._candidate = sample
+                else:
+                    self._count = 0
+                    self._candidate = None
+                if (self._count >= 3 and self._motion is None
+                        and sampled_ns - self._candidate.received_monotonic_ns >= self.CONFIRM_DURATION_NS):
+                    candidate = self._candidate
+                    self._motion = MotionEvent(
+                        candidate.received_monotonic_ns, candidate.received_at_iso,
+                        candidate.delta_g, candidate.x_delta_g,
+                        sampled_ns, sample.received_at_iso,
+                    )
 
     def _read_loop(self):
         while not self._stop.is_set():
@@ -110,6 +148,8 @@ class PiMotionListener:
                 with self._lock:
                     self._latest = None
                     self._count = 0
+                    self._candidate = None
+                    self._previous_sample_ns = None
                     self._error = str(exc)
             remaining = self.INTERVAL_S - (time.monotonic_ns() - started_ns) / 1e9
             self._stop.wait(max(0, remaining))
